@@ -1,4 +1,5 @@
 import {
+  type AnalyticsReport,
   type ChatDetails,
   type ChatModeCode,
   type Message,
@@ -409,6 +410,39 @@ function toSuggestionText(base: string): Suggestion[] {
   }));
 }
 
+function toPeriodBounds(params?: { from?: string; to?: string }) {
+  const now = Date.now();
+  const fallbackFrom = now - 7 * 24 * 60 * 60 * 1000;
+
+  const rawFrom = params?.from ? new Date(params.from).getTime() : fallbackFrom;
+  const rawTo = params?.to ? new Date(params.to).getTime() : now;
+
+  const from = Number.isFinite(rawFrom) ? rawFrom : fallbackFrom;
+  const to = Number.isFinite(rawTo) ? rawTo : now;
+
+  if (from <= to) return { from, to };
+  return { from: to, to: from };
+}
+
+function isInPeriod(value: string | null | undefined, from: number, to: number) {
+  if (!value) return false;
+  const ts = new Date(value).getTime();
+  if (!Number.isFinite(ts)) return false;
+  return ts >= from && ts <= to;
+}
+
+function avg(values: number[]) {
+  if (!values.length) return null;
+  return values.reduce((acc, item) => acc + item, 0) / values.length;
+}
+
+function percentile(values: number[], p: number) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[index];
+}
+
 export const supportMockApi: SupportApi = {
   async ping() {
     await wait(120);
@@ -586,6 +620,186 @@ export const supportMockApi: SupportApi = {
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     return paginate(items, page, pageSize);
+  },
+
+  async getAnalyticsReport(params) {
+    await wait(180);
+    maybeGenerateIncomingActivity();
+
+    const { from, to } = toPeriodBounds(params);
+    const periodFromIso = new Date(from).toISOString();
+    const periodToIso = new Date(to).toISOString();
+
+    const allMessages = state.chats.flatMap((chat) => chat.messages ?? []);
+    const messagesInPeriod = allMessages.filter((item) => isInPeriod(item.time, from, to));
+    const openedTicketsInPeriod = state.tickets.filter((ticket) => isInPeriod(ticket.time_started, from, to));
+    const closedTicketsInPeriod = state.tickets.filter((ticket) => isInPeriod(ticket.time_closed, from, to));
+
+    const resolutionTimeSec = closedTicketsInPeriod
+      .map((ticket) => {
+        const startedAt = new Date(ticket.time_started).getTime();
+        const closedAt = new Date(ticket.time_closed ?? '').getTime();
+        if (!Number.isFinite(startedAt) || !Number.isFinite(closedAt)) return null;
+        return Math.max(0, (closedAt - startedAt) / 1000);
+      })
+      .filter((item): item is number => item !== null);
+
+    const allUsers = new Set(state.chats.map((chat) => chat.user_id));
+    const firstActivityByUser = state.chats.reduce<Record<string, number>>((acc, chat) => {
+      const firstMessage = (chat.messages ?? [])
+        .map((message) => new Date(message.time).getTime())
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)[0];
+      if (firstMessage === undefined) return acc;
+      acc[chat.user_id] = acc[chat.user_id] ? Math.min(acc[chat.user_id], firstMessage) : firstMessage;
+      return acc;
+    }, {});
+
+    const activeUsersInPeriod = new Set(
+      messagesInPeriod.map((message) => {
+        const chat = state.chats.find((item) => item.id === message.chat_id);
+        return chat?.user_id;
+      }).filter((userId): userId is string => Boolean(userId))
+    );
+
+    const newUsersInPeriod = Array.from(activeUsersInPeriod).filter((userId) => {
+      const firstActivityTs = firstActivityByUser[userId];
+      if (!Number.isFinite(firstActivityTs)) return false;
+      return firstActivityTs >= from && firstActivityTs <= to;
+    }).length;
+
+    const returningUsersInPeriod = Array.from(activeUsersInPeriod).filter((userId) => {
+      const firstActivityTs = firstActivityByUser[userId];
+      if (!Number.isFinite(firstActivityTs)) return false;
+      return firstActivityTs < from;
+    }).length;
+
+    const ticketsClosedByAi = state.tickets.filter((ticket) =>
+      (ticket.status_events ?? []).some(
+        (event) =>
+          event.to_status_code === 'closed' && event.changed_by === 'ai_operator' && isInPeriod(event.created_at, from, to)
+      )
+    ).length;
+
+    const ticketsEscalatedToHuman = state.tickets.filter((ticket) =>
+      (ticket.status_events ?? []).some(
+        (event) =>
+          event.from_status_code === 'pending_ai' &&
+          event.to_status_code === 'pending_human' &&
+          isInPeriod(event.created_at, from, to)
+      )
+    ).length;
+
+    const escalatedMessageCounts = state.tickets
+      .map((ticket) => {
+        const escalationEvent = (ticket.status_events ?? [])
+          .filter(
+            (event) =>
+              event.from_status_code === 'pending_ai' &&
+              event.to_status_code === 'pending_human' &&
+              isInPeriod(event.created_at, from, to)
+          )
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0];
+
+        if (!escalationEvent) return null;
+        const escalationTs = new Date(escalationEvent.created_at).getTime();
+        if (!Number.isFinite(escalationTs)) return null;
+
+        return allMessages.filter((message) => {
+          const messageTs = new Date(message.time).getTime();
+          return message.ticket_id === ticket.id && Number.isFinite(messageTs) && messageTs <= escalationTs;
+        }).length;
+      })
+      .filter((value): value is number => value !== null);
+
+    const activeDocuments = state.ragDocs.filter((doc) => !doc.deleted_at);
+    const deletedDocuments = state.ragDocs.filter((doc) => Boolean(doc.deleted_at));
+    const ticketModeCounts = state.chats.reduce(
+      (acc, chat) => {
+        acc[chat.mode_code] += 1;
+        return acc;
+      },
+      {
+        full_ai: 0,
+        ai_assist: 0,
+        no_ai: 0
+      }
+    );
+
+    const retrievalEventsPeriod = Math.max(0, Math.round(messagesInPeriod.length * 0.62));
+    const retrievalEventsTotal = Math.max(retrievalEventsPeriod, Math.round(allMessages.length * 0.58));
+
+    const byEntity = messagesInPeriod.reduce(
+      (acc, message) => {
+        acc[message.entity] += 1;
+        return acc;
+      },
+      {
+        user: 0,
+        ai_operator: 0,
+        operator: 0
+      }
+    );
+
+    return {
+      generated_at: nowIso(),
+      period: {
+        from: periodFromIso,
+        to: periodToIso
+      },
+      tickets: {
+        total: state.tickets.length,
+        by_status: {
+          pending_ai: state.tickets.filter((ticket) => ticket.status_code === 'pending_ai').length,
+          pending_human: state.tickets.filter((ticket) => ticket.status_code === 'pending_human').length,
+          closed: state.tickets.filter((ticket) => ticket.status_code === 'closed').length
+        },
+        opened_in_period: openedTicketsInPeriod.length,
+        closed_in_period: closedTicketsInPeriod.length,
+        avg_resolution_time_seconds: avg(resolutionTimeSec),
+        resolution_time_p50_seconds: percentile(resolutionTimeSec, 50),
+        resolution_time_p95_seconds: percentile(resolutionTimeSec, 95)
+      },
+      messages: {
+        total: allMessages.length,
+        in_period: messagesInPeriod.length,
+        by_entity: byEntity,
+        avg_per_ticket:
+          openedTicketsInPeriod.length > 0 ? messagesInPeriod.length / openedTicketsInPeriod.length : null
+      },
+      ai_performance: {
+        tickets_closed_by_ai: ticketsClosedByAi,
+        tickets_escalated_to_human: ticketsEscalatedToHuman,
+        resolution_rate: closedTicketsInPeriod.length > 0 ? ticketsClosedByAi / closedTicketsInPeriod.length : 0,
+        escalation_rate: openedTicketsInPeriod.length > 0 ? ticketsEscalatedToHuman / openedTicketsInPeriod.length : 0,
+        avg_messages_before_escalation: avg(escalatedMessageCounts),
+        chat_mode_distribution: ticketModeCounts
+      },
+      rag: {
+        total_documents: state.ragDocs.length,
+        active_documents: activeDocuments.length,
+        deleted_documents: deletedDocuments.length,
+        total_chunks: activeDocuments.reduce((acc, doc) => acc + Math.max(1, doc.current_version) * 8, 0),
+        ingestion_jobs: {
+          queued: 0,
+          processing: 0,
+          done: activeDocuments.length,
+          failed: deletedDocuments.length > 0 ? 1 : 0
+        },
+        retrieval: {
+          total_events: retrievalEventsTotal,
+          events_in_period: retrievalEventsPeriod,
+          avg_score: retrievalEventsPeriod > 0 ? 0.84 : null,
+          hit_rate: retrievalEventsPeriod > 0 ? 0.67 : null
+        }
+      },
+      users: {
+        total: allUsers.size,
+        new_in_period: newUsersInPeriod,
+        returning_users_in_period: returningUsersInPeriod,
+        avg_tickets_per_user: allUsers.size > 0 ? state.tickets.length / allUsers.size : null
+      }
+    } satisfies AnalyticsReport;
   },
 
   async uploadRagDocument(payload) {
