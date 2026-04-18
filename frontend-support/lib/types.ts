@@ -1,7 +1,7 @@
 export type ApiMode = 'live' | 'mock';
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-export type TicketStatusCode = 'pending_ai' | 'pending_human' | 'closed';
+export type TicketStatusCode = 'pending_ai' | 'pending_human' | 'pending_user' | 'closed';
 export type ChatModeCode = 'full_ai' | 'no_ai' | 'ai_assist';
 export type ActorEntity = 'user' | 'operator' | 'ai_operator';
 

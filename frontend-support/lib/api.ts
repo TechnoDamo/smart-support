@@ -203,6 +203,7 @@ export const supportLabel = {
   status(code: TicketStatusCode): string {
     if (code === 'pending_ai') return 'pending_ai';
     if (code === 'pending_human') return 'pending_human';
+    if (code === 'pending_user') return 'pending_user';
     return 'closed';
   }
 };

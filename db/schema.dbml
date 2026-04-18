@@ -1,160 +1,251 @@
-Project smart_support {
-  database_type: 'PostgreSQL'
-  Note: 'Transactional DB in PostgreSQL. Vector data in Qdrant.'
+Enum "public"."entity_type" {
+    "user"
+    "ai_operator"
+    "operator"
 }
 
-Enum entity_type {
-  user
-  ai_operator
-  operator
+Table "public"."channels" {
+  "id" uuid [pk, not null]
+  "code" varchar(32) [unique, not null, note: 'telegram']
+  "name" varchar(100) [not null]
+  "description" text
+  "created_at" timestamptz [not null, default: `now()`]
 }
 
-Table channels {
-  id uuid [pk]
-  code varchar(32) [not null, unique, note: 'telegram']
-  name varchar(100) [not null]
-  description text
-  created_at timestamptz [not null, default: `now()`]
+Table "public"."chat_modes" {
+  "id" uuid [pk, not null]
+  "code" varchar(32) [unique, not null, note: 'full_ai | no_ai | ai_assist']
+  "name" varchar(100) [not null]
+  "description" text
+  "created_at" timestamptz [not null, default: `now()`]
 }
 
-Table chat_modes {
-  id uuid [pk]
-  code varchar(32) [not null, unique, note: 'full_ai | no_ai | ai_assist']
-  name varchar(100) [not null]
-  description text
-  created_at timestamptz [not null, default: `now()`]
+Table "public"."ticket_statuses" {
+  "id" uuid [pk, not null]
+  "code" varchar(32) [unique, not null, note: 'pending_ai | pending_human | pending_user | closed']
+  "name" varchar(100) [not null]
+  "description" text
+  "created_at" timestamptz [not null, default: `now()`]
 }
 
-Table ticket_statuses {
-  id uuid [pk]
-  code varchar(32) [not null, unique, note: 'pending_ai | pending_human | closed']
-  name varchar(100) [not null]
-  description text
-  created_at timestamptz [not null, default: `now()`]
+Table "public"."users" {
+  "id" uuid [pk, not null]
+  "telegram_id" bigint [unique, not null]
+  "first_name" varchar(100)
+  "last_name" varchar(100)
+  "username" varchar(100)
+  "created_at" timestamptz [not null, default: `now()`]
+  "updated_at" timestamptz [not null, default: `now()`]
 }
 
-Table users {
-  id uuid [pk]
-  telegram_id bigint [not null, unique]
-  first_name varchar(100)
-  last_name varchar(100)
-  username varchar(100)
-  created_at timestamptz [not null, default: `now()`]
-  updated_at timestamptz [not null, default: `now()`]
-}
+Table "public"."chats" {
+  "id" uuid [pk, not null]
+  "channel_id" uuid [not null, ref: > "public"."channels"."id"]
+  "telegram_chat_id" bigint [unique, not null]
+  "user_id" uuid [not null, ref: > "public"."users"."id"]
+  "mode_id" uuid [not null, ref: > "public"."chat_modes"."id"]
+  "time_started" timestamptz [not null, default: `now()`]
+  "created_at" timestamptz [not null, default: `now()`]
+  "updated_at" timestamptz [not null, default: `now()`]
 
-Table chats {
-  id uuid [pk]
-  channel_id uuid [not null, ref: > channels.id]
-  telegram_chat_id bigint [not null, unique]
-  user_id uuid [not null, ref: > users.id]
-  mode_id uuid [not null, ref: > chat_modes.id]
-  time_started timestamptz [not null, default: `now()`]
-  created_at timestamptz [not null, default: `now()`]
-  updated_at timestamptz [not null, default: `now()`]
-
-  indexes {
-    user_id
-    mode_id
+  Indexes {
+    mode_id [name: "idx_chats_mode_id"]
+    user_id [name: "idx_chats_user_id"]
   }
 }
 
-Table tickets {
-  id uuid [pk]
-  chat_id uuid [not null, ref: > chats.id]
-  title varchar(255)
-  status_id uuid [not null, ref: > ticket_statuses.id]
-  time_started timestamptz [not null, default: `now()`]
-  time_closed timestamptz
-  created_at timestamptz [not null, default: `now()`]
-  updated_at timestamptz [not null, default: `now()`]
+Table "public"."tickets" {
+  "id" uuid [pk, not null]
+  "chat_id" uuid [not null, ref: > "public"."chats"."id"]
+  "title" varchar(255)
+  "status_id" uuid [not null, ref: > "public"."ticket_statuses"."id"]
+  "time_started" timestamptz [not null, default: `now()`]
+  "time_closed" timestamptz
+  "created_at" timestamptz [not null, default: `now()`]
+  "updated_at" timestamptz [not null, default: `now()`]
+  "summary" text
 
-  indexes {
-    chat_id
-    status_id
-    (chat_id, time_started)
+  Indexes {
+    chat_id [name: "idx_tickets_chat_id"]
+    (chat_id, time_started) [name: "idx_tickets_chat_id_time_started"]
+    status_id [name: "idx_tickets_status_id"]
   }
-
-  Note: 'Business rule: only one active ticket per chat at a time. Enforce in SQL with partial unique index on (chat_id) where status in pending_ai/pending_human.'
+  Note: 'Business rule: only one active ticket per chat at a time. Enforce in SQL with partial unique index on (chat_id) where status in pending_ai/pending_human/pending_user.'
 }
 
-Table messages {
-  id uuid [pk]
-  chat_id uuid [not null, ref: > chats.id]
-  ticket_id uuid [not null, ref: > tickets.id]
-  entity entity_type [not null]
-  seq int [not null, note: 'Sequence unique inside one chat']
-  text text [not null]
-  time timestamptz [not null, default: `now()`]
-  created_at timestamptz [not null, default: `now()`]
+Table "public"."messages" {
+  "id" uuid [pk, not null]
+  "chat_id" uuid [not null, ref: > "public"."chats"."id"]
+  "ticket_id" uuid [not null, ref: > "public"."tickets"."id"]
+  "entity" entity_type [not null]
+  "seq" int [not null, note: 'Sequence unique inside one chat']
+  "text" text [not null]
+  "time" timestamptz [not null, default: `now()`]
+  "created_at" timestamptz [not null, default: `now()`]
 
-  indexes {
-    (chat_id, seq) [unique]
-    ticket_id
-    (chat_id, time)
-  }
-}
-
-Table chat_mode_events {
-  id uuid [pk]
-  chat_id uuid [not null, ref: > chats.id]
-  from_mode_id uuid [ref: > chat_modes.id]
-  to_mode_id uuid [not null, ref: > chat_modes.id]
-  changed_by entity_type [not null]
-  changed_by_user_id uuid [ref: > users.id, note: 'Null for AI/system changes']
-  reason text
-  created_at timestamptz [not null, default: `now()`]
-
-  indexes {
-    chat_id
-    created_at
+  Indexes {
+    (chat_id, time) [name: "idx_messages_chat_id_time"]
+    ticket_id [name: "idx_messages_ticket_id"]
+    (chat_id, seq) [unique, name: "idx_messages_chat_id_seq"]
   }
 }
 
-Table ticket_status_events {
-  id uuid [pk]
-  ticket_id uuid [not null, ref: > tickets.id]
-  from_status_id uuid [ref: > ticket_statuses.id]
-  to_status_id uuid [not null, ref: > ticket_statuses.id]
-  changed_by entity_type [not null]
-  changed_by_user_id uuid [ref: > users.id, note: 'Null for AI/system changes']
-  reason text
-  created_at timestamptz [not null, default: `now()`]
+Table "public"."chat_mode_events" {
+  "id" uuid [pk, not null]
+  "chat_id" uuid [not null, ref: > "public"."chats"."id"]
+  "from_mode_id" uuid [ref: > "public"."chat_modes"."id"]
+  "to_mode_id" uuid [not null, ref: > "public"."chat_modes"."id"]
+  "reason" text
+  "created_at" timestamptz [not null, default: `now()`]
 
-  indexes {
-    ticket_id
-    created_at
+  Indexes {
+    chat_id [name: "idx_chat_mode_events_chat_id"]
+    created_at [name: "idx_chat_mode_events_created_at"]
   }
 }
 
-Table rag_documents {
-  id uuid [pk]
-  source_type varchar(32) [not null, note: 'telegram_upload for now']
-  source_name varchar(255) [not null]
-  storage_url text
-  uploaded_by_user_id uuid [ref: > users.id]
-  created_at timestamptz [not null, default: `now()`]
-  deleted_at timestamptz
+Table "public"."ticket_status_events" {
+  "id" uuid [pk, not null]
+  "ticket_id" uuid [not null, ref: > "public"."tickets"."id"]
+  "from_status_id" uuid [ref: > "public"."ticket_statuses"."id"]
+  "to_status_id" uuid [not null, ref: > "public"."ticket_statuses"."id"]
+  "changed_by" entity_type [not null]
+  "changed_by_user_id" uuid [note: 'Null for AI/system changes', ref: > "public"."users"."id"]
+  "reason" text
+  "created_at" timestamptz [not null, default: `now()`]
 
-  indexes {
-    deleted_at
+  Indexes {
+    created_at [name: "idx_ticket_status_events_created_at"]
+    ticket_id [name: "idx_ticket_status_events_ticket_id"]
   }
 }
 
-Table rag_document_chunks {
-  id uuid [pk]
-  document_id uuid [not null, ref: > rag_documents.id]
-  chunk_index int [not null]
-  chunk_text text [not null]
-  qdrant_point_id uuid [not null, unique]
-  metadata jsonb
-  created_at timestamptz [not null, default: `now()`]
-  deleted_at timestamptz
+Table "public"."rag_collections" {
+  "id" uuid [pk, not null]
+  "code" varchar(64) [unique, not null, note: 'Default: support_knowledge']
+  "name" varchar(255) [not null]
+  "qdrant_collection_name" varchar(255) [unique, not null]
+  "embedding_model" varchar(100) [not null]
+  "vector_size" int [not null]
+  "distance_metric" varchar(32) [not null, note: 'cosine | dot | euclid']
+  "is_active" boolean [not null, default: true]
+  "created_at" timestamptz [not null, default: `now()`]
+  "updated_at" timestamptz [not null, default: `now()`]
+}
 
-  indexes {
-    (document_id, chunk_index) [unique]
-    deleted_at
+Table "public"."rag_documents" {
+  "id" uuid [pk, not null]
+  "collection_id" uuid [not null, ref: > "public"."rag_collections"."id"]
+  "source_type" varchar(32) [not null, note: 'telegram_upload for now']
+  "source_name" varchar(255) [not null]
+  "source_external_id" varchar(255) [note: 'Provider-specific file/message id']
+  "mime_type" varchar(100)
+  "storage_url" text
+  "uploaded_by_user_id" uuid [ref: > "public"."users"."id"]
+  "current_version" int [not null, default: 1]
+  "created_at" timestamptz [not null, default: `now()`]
+  "updated_at" timestamptz [not null, default: `now()`]
+  "deleted_at" timestamptz
+
+  Indexes {
+    collection_id [name: "idx_rag_documents_collection_id"]
+    (collection_id, source_type, source_name) [name: "idx_rag_documents_collection_id_source_type_source_name"]
+    deleted_at [name: "idx_rag_documents_deleted_at"]
+    uploaded_by_user_id [name: "idx_rag_documents_uploaded_by_user_id"]
   }
+}
 
-  Note: 'Vector embedding is stored in Qdrant by qdrant_point_id.'
+Table "public"."rag_document_versions" {
+  "id" uuid [pk, not null]
+  "document_id" uuid [not null, ref: > "public"."rag_documents"."id"]
+  "version" int [not null]
+  "content_hash" varchar(128) [not null, note: 'Hash of canonical extracted text']
+  "extraction_status" varchar(32) [not null, note: 'pending | processing | ready | failed']
+  "extracted_text" text
+  "error_message" text
+  "created_at" timestamptz [not null, default: `now()`]
+
+  Indexes {
+    extraction_status [name: "idx_rag_document_versions_extraction_status"]
+    (document_id, version) [unique, name: "idx_rag_document_versions_document_id_version"]
+  }
+}
+
+Table "public"."rag_document_chunks" {
+  "id" uuid [pk, not null]
+  "document_id" uuid [not null, ref: > "public"."rag_documents"."id"]
+  "document_version_id" uuid [not null, ref: > "public"."rag_document_versions"."id"]
+  "collection_id" uuid [not null, ref: > "public"."rag_collections"."id"]
+  "chunk_index" int [not null]
+  "chunk_text" text [not null]
+  "chunk_token_count" int
+  "qdrant_point_id" varchar(128) [unique, not null]
+  "metadata" jsonb
+  "created_at" timestamptz [not null, default: `now()`]
+  "deleted_at" timestamptz
+
+  Indexes {
+    collection_id [name: "idx_rag_document_chunks_collection_id"]
+    deleted_at [name: "idx_rag_document_chunks_deleted_at"]
+    document_id [name: "idx_rag_document_chunks_document_id"]
+    document_version_id [name: "idx_rag_document_chunks_document_version_id"]
+    (document_version_id, chunk_index) [unique, name: "idx_rag_document_chunks_document_version_id_chunk_index"]
+  }
+  Note: 'Vector embedding is stored in Qdrant by qdrant_point_id in qdrant_collection_name.'
+}
+
+Table "public"."rag_ingestion_jobs" {
+  "id" uuid [pk, not null]
+  "collection_id" uuid [not null, ref: > "public"."rag_collections"."id"]
+  "document_id" uuid [ref: > "public"."rag_documents"."id"]
+  "requested_by_user_id" uuid [ref: > "public"."users"."id"]
+  "operation" varchar(32) [not null, note: 'upsert_document | delete_document | reindex_collection']
+  "status" varchar(32) [not null, note: 'queued | processing | done | failed']
+  "error_message" text
+  "started_at" timestamptz
+  "finished_at" timestamptz
+  "created_at" timestamptz [not null, default: `now()`]
+
+  Indexes {
+    collection_id [name: "idx_rag_ingestion_jobs_collection_id"]
+    created_at [name: "idx_rag_ingestion_jobs_created_at"]
+    document_id [name: "idx_rag_ingestion_jobs_document_id"]
+    status [name: "idx_rag_ingestion_jobs_status"]
+  }
+}
+
+Table "public"."rag_retrieval_events" {
+  "id" uuid [pk, not null]
+  "chat_id" uuid [not null, ref: > "public"."chats"."id"]
+  "ticket_id" uuid [not null, ref: > "public"."tickets"."id"]
+  "message_id" uuid [note: 'User message that triggered retrieval', ref: > "public"."messages"."id"]
+  "collection_id" uuid [not null, ref: > "public"."rag_collections"."id"]
+  "query_text" text [not null]
+  "top_k" int [not null]
+  "min_score" double
+  "created_at" timestamptz [not null, default: `now()`]
+
+  Indexes {
+    chat_id [name: "idx_rag_retrieval_events_chat_id"]
+    collection_id [name: "idx_rag_retrieval_events_collection_id"]
+    created_at [name: "idx_rag_retrieval_events_created_at"]
+    message_id [name: "idx_rag_retrieval_events_message_id"]
+    ticket_id [name: "idx_rag_retrieval_events_ticket_id"]
+  }
+}
+
+Table "public"."rag_retrieval_results" {
+  "id" uuid [pk, not null]
+  "retrieval_event_id" uuid [not null, ref: > "public"."rag_retrieval_events"."id"]
+  "chunk_id" uuid [not null, ref: > "public"."rag_document_chunks"."id"]
+  "rank" int [not null]
+  "score" double [not null]
+  "used_in_answer" boolean [not null, default: false]
+  "created_at" timestamptz [not null, default: `now()`]
+
+  Indexes {
+    chunk_id [name: "idx_rag_retrieval_results_chunk_id"]
+    retrieval_event_id [name: "idx_rag_retrieval_results_retrieval_event_id"]
+    (retrieval_event_id, rank) [unique, name: "idx_rag_retrieval_results_retrieval_event_id_rank"]
+  }
 }

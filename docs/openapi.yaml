@@ -416,7 +416,7 @@ components:
   schemas:
     TicketStatusCode:
       type: string
-      enum: [pending_ai, pending_human, closed]
+      enum: [pending_ai, pending_human, pending_user, closed]
 
     ChatModeCode:
       type: string
