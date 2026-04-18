@@ -114,6 +114,85 @@ export type RagUploadResponse = {
   status: 'queued' | 'processing' | 'done' | 'failed';
 };
 
+export type AnalyticsPeriod = {
+  from: string;
+  to: string;
+};
+
+export type AnalyticsTickets = {
+  total: number;
+  by_status: {
+    pending_ai: number;
+    pending_human: number;
+    closed: number;
+  };
+  opened_in_period: number;
+  closed_in_period: number;
+  avg_resolution_time_seconds?: number | null;
+  resolution_time_p50_seconds?: number | null;
+  resolution_time_p95_seconds?: number | null;
+};
+
+export type AnalyticsMessages = {
+  total: number;
+  in_period: number;
+  by_entity: {
+    user: number;
+    ai_operator: number;
+    operator: number;
+  };
+  avg_per_ticket?: number | null;
+};
+
+export type AnalyticsAiPerformance = {
+  tickets_closed_by_ai: number;
+  tickets_escalated_to_human: number;
+  resolution_rate: number;
+  escalation_rate: number;
+  avg_messages_before_escalation?: number | null;
+  chat_mode_distribution: {
+    full_ai: number;
+    ai_assist: number;
+    no_ai: number;
+  };
+};
+
+export type AnalyticsRag = {
+  total_documents: number;
+  active_documents: number;
+  deleted_documents: number;
+  total_chunks: number;
+  ingestion_jobs: {
+    queued: number;
+    processing: number;
+    done: number;
+    failed: number;
+  };
+  retrieval: {
+    total_events: number;
+    events_in_period: number;
+    avg_score?: number | null;
+    hit_rate?: number | null;
+  };
+};
+
+export type AnalyticsUsers = {
+  total: number;
+  new_in_period: number;
+  returning_users_in_period: number;
+  avg_tickets_per_user?: number | null;
+};
+
+export type AnalyticsReport = {
+  generated_at: string;
+  period: AnalyticsPeriod;
+  tickets: AnalyticsTickets;
+  messages: AnalyticsMessages;
+  ai_performance: AnalyticsAiPerformance;
+  rag: AnalyticsRag;
+  users: AnalyticsUsers;
+};
+
 export type ValidationIssue = {
   path: string;
   message: string;
@@ -165,6 +244,10 @@ export type SupportApi = {
     page_size?: number;
     include_deleted?: boolean;
   }) => Promise<RagDocumentListResponse>;
+  getAnalyticsReport: (params?: {
+    from?: string;
+    to?: string;
+  }) => Promise<AnalyticsReport>;
   uploadRagDocument: (payload: {
     source_type: 'telegram_upload';
     source_name: string;

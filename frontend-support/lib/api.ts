@@ -1,5 +1,6 @@
 import {
   ApiError,
+  type AnalyticsReport,
   type ChatListResponse,
   type ChatModeCode,
   type RagDocumentListResponse,
@@ -173,6 +174,15 @@ export const supportApi: SupportApi = {
     });
 
     return requestJson<RagDocumentListResponse>(`/rag/documents${query}`);
+  },
+
+  async getAnalyticsReport(params) {
+    const query = buildQuery({
+      from: params?.from,
+      to: params?.to
+    });
+
+    return requestJson<AnalyticsReport>(`/analytics/report${query}`);
   },
 
   async uploadRagDocument(payload) {

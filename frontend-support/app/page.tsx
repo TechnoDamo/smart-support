@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Brain,
+  ChartColumnBig,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -19,10 +20,23 @@ import {
   Wifi,
   WifiOff
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
 
 import { supportApi, supportLabel } from '@/lib/api';
 import { supportMockApi } from '@/lib/mock';
 import {
+  type AnalyticsReport,
   ApiError,
   type ApiMode,
   type Chat,
@@ -38,9 +52,10 @@ import {
   type TicketStatusCode
 } from '@/lib/types';
 
-type NavSection = 'inbox' | 'knowledge' | 'settings';
+type NavSection = 'inbox' | 'knowledge' | 'settings' | 'analytics';
 type InboxTab = 'new' | 'my' | 'closed';
 type StatusFilter = TicketStatusCode | 'all';
+type AnalyticsView = 'overview' | 'ai' | 'knowledge';
 
 type TicketRow = {
   ticket: Ticket;
@@ -73,9 +88,24 @@ type TimelineItem =
       actor: string;
     };
 
-const PAGE_SIZE = 20;
+const INBOX_TABS: ReadonlyArray<{ key: InboxTab; label: string }> = [
+  { key: 'new', label: 'Новые' },
+  { key: 'my', label: 'Активные' },
+  { key: 'closed', label: 'Закрытые' }
+];
+
+const NAV_SECTIONS: ReadonlyArray<{ key: NavSection; label: string }> = [
+  { key: 'inbox', label: 'Диалоги' },
+  { key: 'knowledge', label: 'База знаний' },
+  { key: 'settings', label: 'Настройки' },
+  { key: 'analytics', label: 'Аналитика' }
+];
+
+const KB_PAGE_SIZE = 20;
+const INBOX_FETCH_SIZE = 500;
 const POLL_MS = 4000;
 const LOCAL_SETTINGS_KEY = 'smart-support-local-settings-v1';
+const CHART_COLORS = ['#2f7df4', '#0f9f65', '#d78a00', '#d14646', '#7a8698'];
 
 function getId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -96,6 +126,61 @@ function toHumanDate(value?: string | null) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function toInputDateTime(value: Date) {
+  const localDate = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
+function parseInputDateTime(value?: string) {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString();
+}
+
+function toChatTimeLabel(value?: string | null) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  const now = new Date();
+  const isSameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isSameDay) {
+    return date.toLocaleTimeString('ru-RU', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  const weekdays = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  return weekdays[date.getDay()];
+}
+
+function formatCompactNumber(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return new Intl.NumberFormat('ru-RU').format(value);
+}
+
+function formatPercent(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatDurationShort(totalSeconds?: number | null) {
+  if (totalSeconds === null || totalSeconds === undefined || Number.isNaN(totalSeconds)) return '—';
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (hours > 0) return `${hours}ч ${minutes}м`;
+  return `${minutes}м`;
 }
 
 function formatTicketStatus(status: TicketStatusCode) {
@@ -144,6 +229,13 @@ function translateMode(mode: ChatModeCode) {
 }
 
 function translateEventLabel(label: string) {
+  const modeToText = (modeCode: string) => {
+    if (modeCode === 'full_ai') return 'AI ведёт диалог';
+    if (modeCode === 'ai_assist') return 'AI помогает';
+    if (modeCode === 'no_ai') return 'Без AI';
+    return modeCode || 'не задан';
+  };
+
   if (label.startsWith('ticket_status_changed:')) {
     return label
       .replace('ticket_status_changed:', 'Статус тикета:')
@@ -154,12 +246,8 @@ function translateEventLabel(label: string) {
   }
 
   if (label.startsWith('chat_mode_changed:')) {
-    return label
-      .replace('chat_mode_changed:', 'Режим чата:')
-      .replace('full_ai', 'AI ведёт')
-      .replace('ai_assist', 'AI помогает')
-      .replace('no_ai', 'без AI')
-      .replace('none', 'не задан');
+    const nextMode = label.split('->').pop()?.trim() ?? '';
+    return `Режим: ${modeToText(nextMode)}`;
   }
 
   if (label === 'ticket_renamed') return 'Тикет переименован';
@@ -167,12 +255,8 @@ function translateEventLabel(label: string) {
   if (label === 'ai_suggestions_generated') return 'Сгенерированы AI-подсказки';
   if (label === 'agent_message_sent') return 'Сообщение отправлено';
   if (label.startsWith('chat_mode_set:')) {
-    return `Режим изменён: ${label
-      .replace('chat_mode_set:', '')
-      .trim()
-      .replace('full_ai', 'AI ведёт диалог')
-      .replace('ai_assist', 'AI помогает')
-      .replace('no_ai', 'Без AI')}`;
+    const nextMode = label.replace('chat_mode_set:', '').trim();
+    return `Режим: ${modeToText(nextMode)}`;
   }
 
   return label;
@@ -205,6 +289,44 @@ function ThemeToggle({ theme, onChange }: { theme: ThemeMode; onChange: (value: 
   );
 }
 
+function AnalyticsKpiCard({
+  title,
+  value,
+  hint
+}: {
+  title: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="soft-surface p-3">
+      <div className="text-[11px] uppercase tracking-[0.05em] text-[var(--muted)]">{title}</div>
+      <div className="mt-1 text-2xl font-semibold leading-none">{value}</div>
+      {hint ? <div className="mt-1 text-xs text-[var(--muted)]">{hint}</div> : null}
+    </div>
+  );
+}
+
+function AnalyticsChartCard({
+  title,
+  subtitle,
+  children
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="soft-surface p-3">
+      <div className="mb-2">
+        <div className="text-sm font-semibold">{title}</div>
+        {subtitle ? <div className="text-xs text-[var(--muted)]">{subtitle}</div> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export default function SupportWorkspacePage() {
   const [apiMode, setApiMode] = useState<ApiMode>('mock');
   const [serverStatus, setServerStatus] = useState<ServerStatus>('unknown');
@@ -214,7 +336,10 @@ export default function SupportWorkspacePage() {
   const [inboxTab, setInboxTab] = useState<InboxTab>('new');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [ticketPage, setTicketPage] = useState(1);
+  const [isChatListOpen, setIsChatListOpen] = useState(true);
+  const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(true);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [isChatModalViewport, setIsChatModalViewport] = useState(false);
 
   const [isLoadingInbox, setIsLoadingInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
@@ -248,23 +373,42 @@ export default function SupportWorkspacePage() {
   const [isKbUploading, setIsKbUploading] = useState(false);
   const [ingestionStatusMap, setIngestionStatusMap] = useState<Record<string, string>>({});
 
+  const [analyticsFromInput, setAnalyticsFromInput] = useState(() =>
+    toInputDateTime(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+  );
+  const [analyticsToInput, setAnalyticsToInput] = useState(() => toInputDateTime(new Date()));
+  const [analyticsReport, setAnalyticsReport] = useState<AnalyticsReport | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsView>('overview');
+  const [isAnalyticsRangeOpen, setIsAnalyticsRangeOpen] = useState(false);
+
   const [defaultModeSetting, setDefaultModeSetting] = useState<ChatModeCode>('ai_assist');
   const [settingsSaveState, setSettingsSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [autoCloseMinutes, setAutoCloseMinutes] = useState(30);
   const [autoSummaryAfterClose, setAutoSummaryAfterClose] = useState(true);
   const [pushSummaryToRag, setPushSummaryToRag] = useState(false);
 
-  const [isAutoScroll, setIsAutoScroll] = useState(true);
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const shouldJumpToBottomRef = useRef(false);
+  const lastSeenMessageKeyByTicketRef = useRef<Record<string, string>>({});
 
   const api = useMemo(() => (apiMode === 'mock' ? supportMockApi : supportApi), [apiMode]);
-
-  const openInboxCount = ticketCounters.pending_ai + ticketCounters.pending_human;
 
   const selectedRow = useMemo(() => {
     if (!selectedTicketId) return null;
     return rawRows.find((row) => row.ticket.id === selectedTicketId) ?? null;
   }, [rawRows, selectedTicketId]);
+
+  const activeInboxTabIndex = useMemo(
+    () => Math.max(0, INBOX_TABS.findIndex((tab) => tab.key === inboxTab)),
+    [inboxTab]
+  );
+
+  const activeSectionIndex = useMemo(
+    () => Math.max(0, NAV_SECTIONS.findIndex((item) => item.key === section)),
+    [section]
+  );
 
   const filteredRows = useMemo(() => {
     let rows = [...rawRows];
@@ -311,7 +455,6 @@ export default function SupportWorkspacePage() {
     if (!selectedTicketId) return [];
 
     const messages = (chatDetails?.messages ?? []).filter((item) => item.ticket_id === selectedTicketId);
-    const statusEvents = ticketDetails?.status_events ?? [];
     const modeEvents = chatDetails?.mode_events ?? [];
     const localEvents = localEventsByTicket[selectedTicketId] ?? [];
 
@@ -323,17 +466,6 @@ export default function SupportWorkspacePage() {
         kind: 'message',
         ts: message.time,
         message
-      });
-    }
-
-    for (const event of statusEvents) {
-      const from = event.from_status_code ?? 'none';
-      all.push({
-        id: `st-${event.created_at}-${event.to_status_code}`,
-        kind: 'event',
-        ts: event.created_at,
-        actor: actorLabel(event.changed_by),
-        label: `ticket_status_changed: ${from} -> ${event.to_status_code}`
       });
     }
 
@@ -349,6 +481,9 @@ export default function SupportWorkspacePage() {
     }
 
     for (const event of localEvents) {
+      if (event.label === 'rag_sources_attached' || event.label === 'ai_suggestions_generated') {
+        continue;
+      }
       all.push({
         id: event.id,
         kind: 'event',
@@ -360,7 +495,12 @@ export default function SupportWorkspacePage() {
 
     all.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
     return all;
-  }, [chatDetails?.messages, chatDetails?.mode_events, ticketDetails?.status_events, selectedTicketId, localEventsByTicket]);
+  }, [chatDetails?.messages, chatDetails?.mode_events, selectedTicketId, localEventsByTicket]);
+
+  const selectedTicketMessages = useMemo(() => {
+    if (!selectedTicketId) return [] as Message[];
+    return (chatDetails?.messages ?? []).filter((message) => message.ticket_id === selectedTicketId);
+  }, [chatDetails?.messages, selectedTicketId]);
 
   const kbCounters = useMemo(() => {
     const values = Object.values(ingestionStatusMap);
@@ -415,7 +555,7 @@ export default function SupportWorkspacePage() {
         const queryStatus = statusFilter === 'all' ? statusFromTab : statusFilter;
 
         const basePromises: Array<Promise<unknown>> = [
-          api.listTickets({ page: ticketPage, page_size: PAGE_SIZE, status: queryStatus }),
+          api.listTickets({ page: 1, page_size: INBOX_FETCH_SIZE, status: queryStatus }),
           api.listChats({ page: 1, page_size: 200 })
         ];
 
@@ -482,11 +622,12 @@ export default function SupportWorkspacePage() {
         setTicketTotal(ticketsResponse.total);
 
         if (rows.length > 0) {
-          setSelectedTicketId((current) => {
-            if (!current) return rows[0].ticket.id;
-            const exists = rows.some((row) => row.ticket.id === current);
-            return exists ? current : rows[0].ticket.id;
-          });
+          const hasCurrentSelection = Boolean(selectedTicketId) && rows.some((row) => row.ticket.id === selectedTicketId);
+          const nextSelectedTicketId = hasCurrentSelection ? selectedTicketId : rows[0].ticket.id;
+          if (nextSelectedTicketId && nextSelectedTicketId !== selectedTicketId) {
+            shouldJumpToBottomRef.current = true;
+          }
+          setSelectedTicketId(nextSelectedTicketId);
         } else {
           setSelectedTicketId(null);
         }
@@ -510,7 +651,7 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, apiMode, inboxTab, statusFilter, ticketPage]
+    [api, apiMode, inboxTab, selectedTicketId, statusFilter]
   );
 
   const loadTicketCard = useCallback(
@@ -565,7 +706,7 @@ export default function SupportWorkspacePage() {
       try {
         const response = await api.listRagDocuments({
           page: kbPage,
-          page_size: PAGE_SIZE,
+          page_size: KB_PAGE_SIZE,
           include_deleted: kbIncludeDeleted
         });
 
@@ -589,6 +730,104 @@ export default function SupportWorkspacePage() {
     [api, kbPage, kbIncludeDeleted]
   );
 
+  const loadAnalytics = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setIsAnalyticsLoading(true);
+      }
+      setAnalyticsError(null);
+
+      try {
+        const response = await api.getAnalyticsReport({
+          from: parseInputDateTime(analyticsFromInput),
+          to: parseInputDateTime(analyticsToInput)
+        });
+        setAnalyticsReport(response);
+      } catch (error) {
+        setAnalyticsError(error instanceof Error ? error.message : 'Не удалось загрузить аналитику');
+      } finally {
+        if (!silent) {
+          setIsAnalyticsLoading(false);
+        }
+      }
+    },
+    [analyticsFromInput, analyticsToInput, api]
+  );
+
+  const onApplyAnalyticsPreset = useCallback((days: number) => {
+    const now = new Date();
+    const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    setAnalyticsFromInput(toInputDateTime(from));
+    setAnalyticsToInput(toInputDateTime(now));
+  }, []);
+
+  const ANALYTICS_VIEWS: ReadonlyArray<{ key: AnalyticsView; label: string }> = useMemo(
+    () => [
+      { key: 'overview', label: 'Обзор' },
+      { key: 'ai', label: 'AI' },
+      { key: 'knowledge', label: 'База знаний' }
+    ],
+    []
+  );
+
+  const activeAnalyticsViewIndex = useMemo(
+    () => Math.max(0, ANALYTICS_VIEWS.findIndex((tab) => tab.key === analyticsView)),
+    [ANALYTICS_VIEWS, analyticsView]
+  );
+
+  const analyticsTicketStatusData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'Ожидают AI', value: analyticsReport.tickets.by_status.pending_ai },
+      { name: 'Ожидают человека', value: analyticsReport.tickets.by_status.pending_human },
+      { name: 'Закрытые', value: analyticsReport.tickets.by_status.closed }
+    ];
+  }, [analyticsReport]);
+
+  const analyticsMessagesData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'Клиент', value: analyticsReport.messages.by_entity.user },
+      { name: 'AI', value: analyticsReport.messages.by_entity.ai_operator },
+      { name: 'Оператор', value: analyticsReport.messages.by_entity.operator }
+    ];
+  }, [analyticsReport]);
+
+  const analyticsAiRatesData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'Закрыто AI', value: Math.round(analyticsReport.ai_performance.resolution_rate * 100) },
+      { name: 'Передано человеку', value: Math.round(analyticsReport.ai_performance.escalation_rate * 100) }
+    ];
+  }, [analyticsReport]);
+
+  const analyticsModeData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'AI ведёт', value: analyticsReport.ai_performance.chat_mode_distribution.full_ai },
+      { name: 'AI помогает', value: analyticsReport.ai_performance.chat_mode_distribution.ai_assist },
+      { name: 'Без AI', value: analyticsReport.ai_performance.chat_mode_distribution.no_ai }
+    ];
+  }, [analyticsReport]);
+
+  const analyticsIngestionData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'В очереди', value: analyticsReport.rag.ingestion_jobs.queued },
+      { name: 'Обработка', value: analyticsReport.rag.ingestion_jobs.processing },
+      { name: 'Готово', value: analyticsReport.rag.ingestion_jobs.done },
+      { name: 'Ошибки', value: analyticsReport.rag.ingestion_jobs.failed }
+    ];
+  }, [analyticsReport]);
+
+  const analyticsUserData = useMemo(() => {
+    if (!analyticsReport) return [];
+    return [
+      { name: 'Новые', value: analyticsReport.users.new_in_period },
+      { name: 'Возвраты', value: analyticsReport.users.returning_users_in_period }
+    ];
+  }, [analyticsReport]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -596,10 +835,9 @@ export default function SupportWorkspacePage() {
     const sectionParam = params.get('section');
     const tabParam = params.get('tab');
     const statusParam = params.get('status');
-    const pageParam = params.get('page');
     const qParam = params.get('q');
 
-    if (sectionParam === 'inbox' || sectionParam === 'knowledge' || sectionParam === 'settings') {
+    if (sectionParam === 'inbox' || sectionParam === 'knowledge' || sectionParam === 'settings' || sectionParam === 'analytics') {
       setSection(sectionParam);
     }
     if (tabParam === 'new' || tabParam === 'my' || tabParam === 'closed') {
@@ -612,12 +850,6 @@ export default function SupportWorkspacePage() {
       statusParam === 'closed'
     ) {
       setStatusFilter(statusParam);
-    }
-    if (pageParam) {
-      const parsed = Number(pageParam);
-      if (Number.isFinite(parsed) && parsed >= 1) {
-        setTicketPage(parsed);
-      }
     }
     if (qParam) {
       setSearch(qParam);
@@ -633,7 +865,6 @@ export default function SupportWorkspacePage() {
     if (section === 'inbox') {
       params.set('tab', inboxTab);
       params.set('status', statusFilter);
-      params.set('page', String(ticketPage));
       if (search.trim()) {
         params.set('q', search.trim());
       }
@@ -641,7 +872,7 @@ export default function SupportWorkspacePage() {
 
     const nextUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', nextUrl);
-  }, [section, inboxTab, statusFilter, ticketPage, search]);
+  }, [section, inboxTab, statusFilter, search]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -717,6 +948,40 @@ export default function SupportWorkspacePage() {
   }, [themeMode]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const suggestionsQuery = window.matchMedia('(max-width: 1279px)');
+    const chatQuery = window.matchMedia('(max-width: 1023px)');
+    const applyViewport = () => {
+      const isSuggestionsCompact = suggestionsQuery.matches;
+      const isChatCompact = chatQuery.matches;
+      setIsCompactViewport(isSuggestionsCompact);
+      setIsChatModalViewport(isChatCompact);
+
+      if (isSuggestionsCompact) {
+        setIsSuggestionsOpen(false);
+      } else {
+        setIsSuggestionsOpen(true);
+      }
+
+      if (isChatCompact) {
+        setIsChatListOpen(false);
+      } else {
+        setIsChatListOpen(true);
+      }
+    };
+
+    applyViewport();
+    const onChange = () => applyViewport();
+    suggestionsQuery.addEventListener('change', onChange);
+    chatQuery.addEventListener('change', onChange);
+    return () => {
+      suggestionsQuery.removeEventListener('change', onChange);
+      chatQuery.removeEventListener('change', onChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (apiMode === 'mock') {
       setServerStatus('online');
       return;
@@ -771,30 +1036,63 @@ export default function SupportWorkspacePage() {
   }, [section, loadKnowledgeBase]);
 
   useEffect(() => {
+    if (section !== 'analytics') return;
+    loadAnalytics();
+  }, [section, loadAnalytics]);
+
+  useEffect(() => {
     if (filteredRows.length === 0) {
       setSelectedTicketId(null);
       return;
     }
 
     if (!selectedTicketId || !filteredRows.some((item) => item.ticket.id === selectedTicketId)) {
+      shouldJumpToBottomRef.current = true;
       setSelectedTicketId(filteredRows[0].ticket.id);
     }
   }, [filteredRows, selectedTicketId]);
 
   useEffect(() => {
-    if (!timelineRef.current || !isAutoScroll) return;
-    timelineRef.current.scrollTo({
-      top: timelineRef.current.scrollHeight,
-      behavior: 'smooth'
-    });
-  }, [timelineItems, isAutoScroll]);
-
-  const onTimelineScroll = useCallback(() => {
+    if (!selectedTicketId || isLoadingTicketCard || !shouldJumpToBottomRef.current) return;
+    if (!selectedRow || !chatDetails || chatDetails.id !== selectedRow.ticket.chat_id) return;
     const el = timelineRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 44;
-    setIsAutoScroll(nearBottom);
-  }, []);
+    const rafId = window.requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      shouldJumpToBottomRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [chatDetails, isLoadingTicketCard, selectedRow, selectedTicketId, timelineItems]);
+
+  useEffect(() => {
+    if (!selectedTicketId || !selectedRow || !chatDetails) return;
+    if (chatDetails.id !== selectedRow.ticket.chat_id) return;
+
+    const lastMessage = selectedTicketMessages[selectedTicketMessages.length - 1];
+    const nextKey = lastMessage ? `${lastMessage.id}:${lastMessage.entity}` : '';
+    const prevKey = lastSeenMessageKeyByTicketRef.current[selectedTicketId];
+
+    if (!prevKey) {
+      lastSeenMessageKeyByTicketRef.current[selectedTicketId] = nextKey;
+      return;
+    }
+
+    if (!nextKey || prevKey === nextKey) return;
+    lastSeenMessageKeyByTicketRef.current[selectedTicketId] = nextKey;
+
+    if (lastMessage.entity !== 'operator' && lastMessage.entity !== 'user') return;
+    const el = timelineRef.current;
+    if (!el) return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      el.scrollTo({
+        top: el.scrollHeight,
+        behavior: 'smooth'
+      });
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [chatDetails, selectedRow, selectedTicketId, selectedTicketMessages]);
 
   const onManualRefresh = useCallback(async () => {
     await Promise.all([loadInbox(false), selectedTicketId ? loadTicketCard(selectedTicketId, false) : Promise.resolve()]);
@@ -810,14 +1108,13 @@ export default function SupportWorkspacePage() {
           reason
         });
 
-        addLocalEvent(selectedRow.ticket.id, `chat_mode_set: ${nextMode}`);
         await loadInbox(true);
         await loadTicketCard(selectedRow.ticket.id, true);
       } catch (error) {
         setInboxError(error instanceof Error ? error.message : 'Не удалось сменить режим чата');
       }
     },
-    [addLocalEvent, api, loadInbox, loadTicketCard, selectedRow]
+    [api, loadInbox, loadTicketCard, selectedRow]
   );
 
   const onQuickAction = useCallback(
@@ -835,6 +1132,7 @@ export default function SupportWorkspacePage() {
 
     try {
       setIsLoadingSuggestions(true);
+      setIsSuggestionsOpen(true);
       const response = await api.getSuggestions(selectedRow.ticket.chat_id, {
         ticket_id: selectedRow.ticket.id,
         draft_context: composerText.trim() || undefined,
@@ -843,19 +1141,12 @@ export default function SupportWorkspacePage() {
 
       setSuggestions(response.suggestions);
       setExpandedSourcesSuggestionId(null);
-      const hasAnySources = response.suggestions.some((suggestion) => (suggestion.citations?.length ?? 0) > 0);
-
-      addLocalEvent(
-        selectedRow.ticket.id,
-        hasAnySources ? 'rag_sources_attached' : 'ai_suggestions_generated',
-        'ai_operator'
-      );
     } catch (error) {
       setInboxError(error instanceof Error ? error.message : 'Не удалось получить AI-подсказки');
     } finally {
       setIsLoadingSuggestions(false);
     }
-  }, [addLocalEvent, api, composerText, selectedRow]);
+  }, [api, composerText, selectedRow]);
 
   const onUseSuggestion = useCallback((text: string) => {
     setComposerText((prev) => {
@@ -868,28 +1159,53 @@ export default function SupportWorkspacePage() {
     setExpandedSourcesSuggestionId((current) => (current === suggestionId ? null : suggestionId));
   }, []);
 
+  const sendMessageText = useCallback(
+    async (text: string) => {
+      if (!selectedRow || !text.trim()) return;
+
+      try {
+        setIsSendingMessage(true);
+
+        await api.sendMessage(selectedRow.ticket.chat_id, {
+          ticket_id: selectedRow.ticket.id,
+          text: text.trim()
+        });
+
+        setComposerText('');
+
+        await loadTicketCard(selectedRow.ticket.id, true);
+        await loadInbox(true);
+      } catch (error) {
+        setInboxError(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
+      } finally {
+        setIsSendingMessage(false);
+      }
+    },
+    [api, loadInbox, loadTicketCard, selectedRow]
+  );
+
   const onSendMessage = useCallback(async () => {
-    if (!selectedRow || !composerText.trim()) return;
+    await sendMessageText(composerText);
+  }, [composerText, sendMessageText]);
 
-    try {
-      setIsSendingMessage(true);
+  const onSendSuggestionNow = useCallback(
+    async (text: string) => {
+      await sendMessageText(text);
+    },
+    [sendMessageText]
+  );
 
-      await api.sendMessage(selectedRow.ticket.chat_id, {
-        ticket_id: selectedRow.ticket.id,
-        text: composerText.trim()
-      });
-
-      setComposerText('');
-      addLocalEvent(selectedRow.ticket.id, 'agent_message_sent');
-
-      await loadTicketCard(selectedRow.ticket.id, true);
-      await loadInbox(true);
-    } catch (error) {
-      setInboxError(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
-    } finally {
-      setIsSendingMessage(false);
-    }
-  }, [addLocalEvent, api, composerText, loadInbox, loadTicketCard, selectedRow]);
+  const onComposerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (!isSendingMessage && composerText.trim()) {
+          void onSendMessage();
+        }
+      }
+    },
+    [composerText, isSendingMessage, onSendMessage]
+  );
 
   const onUploadKbFiles = useCallback(
     async (fileList: FileList | null) => {
@@ -946,69 +1262,261 @@ export default function SupportWorkspacePage() {
     }
   }, [api, defaultModeSetting]);
 
-  return (
-    <main className="mx-auto max-w-[1680px] px-3 pb-4 pt-4 sm:px-4 sm:pt-5 lg:px-6">
-      <header className="surface fade-in-up mb-3 p-3 sm:p-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex min-w-0 flex-col gap-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-[0.08em] text-[var(--muted)]">
-                Smart Support
+  const chatListContent = (
+    <>
+      <div
+        className={`mb-3 grid items-center gap-2 ${
+          !isChatModalViewport ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-1'
+        }`}
+      >
+        <div className="relative min-w-0 rounded-xl bg-[var(--bg-soft)] p-1">
+          <span
+            className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-lg bg-[var(--accent)] shadow-[0_8px_20px_rgba(47,125,244,0.3)] transition-transform duration-300 ease-out"
+            style={{
+              width: `calc((100% - 8px) / ${INBOX_TABS.length})`,
+              transform: `translateX(${activeInboxTabIndex * 100}%)`
+            }}
+          />
+          <div className="relative z-10 grid min-w-0 grid-cols-3">
+            {INBOX_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className={`min-w-0 truncate rounded-lg px-2 py-1.5 text-xs font-medium transition-colors duration-200 ${
+                  inboxTab === tab.key ? 'text-white' : 'text-[var(--muted)] hover:text-[var(--text)]'
+                }`}
+                onClick={() => {
+                  setInboxTab(tab.key);
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {!isChatModalViewport ? (
+          <button
+            className="btn btn-primary inline-flex h-7 w-7 items-center justify-center self-center text-white"
+            style={{ padding: 0 }}
+            onClick={() => setIsChatListOpen(false)}
+            aria-label="Свернуть чаты"
+          >
+            <svg viewBox="0 0 24 24" className="h-3 w-3 text-white" aria-hidden="true">
+              <path
+                d="M15.5 4.5 8.5 12l7 7.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mb-3 grid grid-cols-1 gap-2">
+        <label className="relative">
+          <input
+            className="field pl-8"
+            placeholder="Поиск по диалогам"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+          <select
+            className="field"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+          >
+            <option value="all">Все статусы</option>
+            <option value="pending_ai">Ожидают AI</option>
+            <option value="pending_human">Ожидают человека</option>
+            <option value="closed">Закрытые</option>
+          </select>
+
+          <button className="btn justify-center" onClick={onManualRefresh} aria-label="Обновить">
+            <RefreshCcw size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
+        <div>
+          Диалоги: {filteredRows.length} из {ticketTotal}
+        </div>
+        {isLoadingInbox ? (
+          <div className="inline-flex items-center gap-1">
+            <Loader2 size={13} className="animate-spin" />
+            Обновляем...
+          </div>
+        ) : null}
+      </div>
+
+      <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-1">
+        {filteredRows.map((row) => {
+          const isActive = selectedTicketId === row.ticket.id;
+          const isClosed = row.ticket.status_code === 'closed';
+          const aiAutoReply = row.chat?.mode_code === 'full_ai' && !isClosed;
+
+          return (
+            <button
+              key={row.ticket.id}
+              className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                isActive
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                  : 'border-[var(--line)] bg-[var(--panel-solid)] hover:bg-[var(--bg-soft)]'
+              } ${row.ticket.status_code === 'pending_ai' ? 'status-pulse' : ''}`}
+              onClick={() => {
+                shouldJumpToBottomRef.current = true;
+                setSelectedTicketId(row.ticket.id);
+                if (isChatModalViewport) {
+                  setIsChatListOpen(false);
+                }
+              }}
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div className="truncate text-sm font-semibold">{deriveUserDisplay(row.chat)}</div>
+                <span className="badge badge-muted">{toChatTimeLabel(row.lastMessageAt)}</span>
+
+                {aiAutoReply ? <span className="ai-dot" title="AI отвечает автоматически" /> : null}
               </div>
-              <div className="mt-1 text-xl font-semibold">Рабочее место оператора</div>
-            </div>
+
+              <div className="line-clamp-2 text-sm text-[var(--muted)]">{row.snippet}</div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-1">
+               
+              </div>
+            </button>
+          );
+        })}
+
+        {filteredRows.length === 0 ? (
+          <div className="rounded-xl bg-[var(--bg-soft)] p-4 text-sm text-[var(--muted)]">
+            Ничего не найдено.
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+
+  const suggestionsContent = (
+    <>
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--muted)]">Варианты ответа</div>
+
+      {isLoadingSuggestions ? (
+        <div className="mb-2 inline-flex items-center gap-2 text-xs text-[var(--muted)]">
+          <Loader2 size={13} className="animate-spin" />
+          Генерируем рекомендации...
+        </div>
+      ) : null}
+
+      {!isLoadingSuggestions && suggestions.length === 0 ? (
+        <div className="rounded-xl bg-[var(--panel-solid)] px-3 py-2 text-xs text-[var(--muted)]">
+          Нажмите кнопку AI в поле ввода, чтобы получить варианты.
+        </div>
+      ) : null}
+
+      <div className="scrollbar-thin max-h-full space-y-2 overflow-y-auto pr-1">
+        {suggestions.map((suggestion, index) => (
+          <div key={suggestion.id} className="rounded-xl border border-[var(--line)] bg-[var(--panel-solid)] p-2">
+            <div className="mb-2 whitespace-pre-wrap text-sm leading-5 text-[var(--text)]">{suggestion.text}</div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                className={`btn px-3 py-2 text-sm ${section === 'inbox' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setSection('inbox')}
-              >
-                <MessageCircle size={14} />
-                Диалоги
-                <span className="badge badge-muted ml-1">{openInboxCount}</span>
+              <button className="btn px-2.5 py-1.5 text-xs" onClick={() => onUseSuggestion(suggestion.text)}>
+                Вставить в ответ
               </button>
+              <button
+                className="btn btn-primary px-2.5 py-1.5 text-xs"
+                onClick={() => onSendSuggestionNow(suggestion.text)}
+                disabled={isSendingMessage}
+              >
+                Отправить сразу
+              </button>
+              <button className="btn px-2.5 py-1.5 text-xs" onClick={() => onToggleSuggestionSources(suggestion.id)}>
+                Источник {index + 1}
+              </button>
+            </div>
 
-              <button
-                className={`btn px-3 py-2 text-sm ${section === 'knowledge' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setSection('knowledge')}
-              >
-                <FileText size={14} />
-                База знаний
-              </button>
+            {expandedSourcesSuggestionId === suggestion.id ? (
+              <div className="mt-2 space-y-2">
+                {(suggestion.citations ?? []).map((citation) => (
+                  <div key={`${suggestion.id}-${citation.chunk_id}`} className="rounded-lg bg-[var(--bg-soft)] p-2 text-xs">
+                    <div>Документ: {docNameById[citation.document_id] ?? citation.document_id}</div>
+                    <div>Фрагмент: {citation.chunk_id}</div>
+                    <div>Оценка: {citation.score.toFixed(3)}</div>
+                  </div>
+                ))}
+                {(suggestion.citations ?? []).length === 0 ? (
+                  <div className="rounded-lg bg-[var(--bg-soft)] p-2 text-xs text-[var(--muted)]">
+                    Для этого варианта источники не найдены.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </>
+  );
 
-              <button
-                className={`btn px-3 py-2 text-sm ${section === 'settings' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setSection('settings')}
+  return (
+    <main className="mx-auto max-w-[1680px] px-3 pb-4 pt-4 sm:px-4 sm:pt-5 lg:px-6">
+      <header className="surface fade-in-up mb-3 p-2">
+        <div className="flex items-center justify-between gap-2 overflow-x-auto whitespace-nowrap">
+          <div className="inline-flex items-center gap-2">
+            <div className="px-1 text-sm font-semibold">Smart Support</div>
+            <div className="relative rounded-xl bg-[var(--bg-soft)] p-1">
+              <span
+                className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-lg bg-[var(--accent)] shadow-[0_8px_20px_rgba(47,125,244,0.3)] transition-transform duration-300 ease-out"
+                style={{
+                  width: `calc((100% - 8px) / ${NAV_SECTIONS.length})`,
+                  transform: `translateX(${activeSectionIndex * 100}%)`
+                }}
+              />
+              <div
+                className="relative z-10 grid"
+                style={{ gridTemplateColumns: `repeat(${NAV_SECTIONS.length}, minmax(0, 1fr))` }}
               >
-                <Settings size={14} />
-                Настройки
-              </button>
+                {NAV_SECTIONS.map((item) => (
+                  <button
+                    key={item.key}
+                    className={`inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors duration-200 ${
+                      section === item.key ? 'text-white' : 'text-[var(--muted)] hover:text-[var(--text)]'
+                    }`}
+                    onClick={() => setSection(item.key)}
+                  >
+                    {item.key === 'inbox' ? <MessageCircle size={13} /> : null}
+                    {item.key === 'knowledge' ? <FileText size={13} /> : null}
+                    {item.key === 'settings' ? <Settings size={13} /> : null}
+                    {item.key === 'analytics' ? <ChartColumnBig size={13} /> : null}
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="soft-surface flex items-center gap-1 p-1 text-sm">
+          <div className="inline-flex items-center gap-2">
+            <div className="soft-surface flex items-center gap-1 p-1">
               <button
-                className={`btn px-3 py-1.5 text-sm ${apiMode === 'mock' ? 'btn-primary' : 'btn-ghost'}`}
+                className={`btn px-2.5 py-1 text-xs ${apiMode === 'mock' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setApiMode('mock')}
               >
-                Тестовый режим
+                Тест
               </button>
               <button
-                className={`btn px-3 py-1.5 text-sm ${apiMode === 'live' ? 'btn-primary' : 'btn-ghost'}`}
+                className={`btn px-2.5 py-1 text-xs ${apiMode === 'live' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setApiMode('live')}
               >
-                Реальный API
+                API
               </button>
             </div>
 
-            <div className="soft-surface flex items-center gap-2 px-3 py-2 text-sm text-[var(--muted)]">
-              {serverStatus === 'online' ? <Wifi size={14} /> : <WifiOff size={14} />}
-              {serverStatus === 'online'
-                ? 'API подключён'
-                : serverStatus === 'offline'
-                  ? 'API недоступен'
-                  : 'Статус API'}
+            <div className="soft-surface flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[var(--muted)]">
+              {serverStatus === 'online' ? <Wifi size={13} /> : <WifiOff size={13} />}
+              {serverStatus === 'online' ? 'Online' : serverStatus === 'offline' ? 'Offline' : 'Проверка'}
             </div>
 
             <ThemeToggle theme={themeMode} onChange={setThemeMode} />
@@ -1023,332 +1531,284 @@ export default function SupportWorkspacePage() {
       ) : null}
 
       {section === 'inbox' ? (
-        <div className="grid h-[calc(100dvh-190px)] min-h-[560px] gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
-          <section className="surface fade-in-up flex min-h-0 flex-col p-3">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              {(['new', 'my', 'closed'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  className={`btn px-3 py-1.5 text-sm ${inboxTab === tab ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => {
-                    setInboxTab(tab);
-                    setTicketPage(1);
-                  }}
+        <div className="relative h-[calc(100dvh-150px)] min-h-[560px]">
+          <div
+            className={`grid h-full min-h-0 transition-[grid-template-columns,gap] duration-300 ${
+              isChatModalViewport ? 'grid-cols-1 gap-0' : 'gap-2 lg:grid-cols-[auto_minmax(0,1fr)]'
+            }`}
+          >
+            <div
+              className={`hidden overflow-hidden pr-2 transition-[width,padding] duration-300 lg:block ${
+                isChatListOpen ? 'w-[320px]' : 'w-[56px]'
+              }`}
+            >
+              <section className="surface relative flex h-full min-h-0 w-full overflow-hidden">
+                <div
+                  className={`absolute inset-0 flex min-h-0 flex-col p-3 transition-[opacity,transform] duration-300 ease-in-out ${
+                    isChatListOpen ? 'translate-x-0 opacity-100 z-10' : '-translate-x-2 opacity-0 pointer-events-none z-0'
+                  }`}
                 >
-                  {tab === 'new' ? 'Новые' : tab === 'my' ? 'Активные' : 'Закрытые'}
-                </button>
-              ))}
-            </div>
-
-            <div className="mb-3 grid grid-cols-1 gap-2">
-              <label className="relative">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-                  size={14}
-                />
-                <input
-                  className="field pl-8"
-                  placeholder="Поиск по диалогам"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </label>
-
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
-                <select
-                  className="field"
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-                >
-                  <option value="all">Все статусы</option>
-                  <option value="pending_ai">Ожидают AI</option>
-                  <option value="pending_human">Ожидают человека</option>
-                  <option value="closed">Закрытые</option>
-                </select>
-
-                <button className="btn justify-center" onClick={onManualRefresh} aria-label="Обновить">
-                  <RefreshCcw size={14} />
-                </button>
-              </div>
-            </div>
-
-            <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
-              <div>
-                Диалоги: {filteredRows.length} из {ticketTotal}
-              </div>
-              {isLoadingInbox ? (
-                <div className="inline-flex items-center gap-1">
-                  <Loader2 size={13} className="animate-spin" />
-                  Обновляем...
+                  {chatListContent}
                 </div>
-              ) : null}
-            </div>
 
-            <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-1">
-              {filteredRows.map((row) => {
-                const isActive = selectedTicketId === row.ticket.id;
-                const isClosed = row.ticket.status_code === 'closed';
-                const aiAutoReply = row.chat?.mode_code === 'full_ai' && !isClosed;
-
-                return (
+                <div
+                  className={`absolute inset-0 flex min-h-0 flex-col p-1.5 transition-[opacity,transform] duration-300 ease-in-out ${
+                    isChatListOpen ? 'translate-x-2 opacity-0 pointer-events-none z-0' : 'translate-x-0 opacity-100 z-10'
+                  }`}
+                >
                   <button
-                    key={row.ticket.id}
-                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                      isActive
-                        ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                        : 'border-[var(--line)] bg-[var(--panel-solid)] hover:bg-[var(--bg-soft)]'
-                    } ${row.ticket.status_code === 'pending_ai' ? 'status-pulse' : ''}`}
-                    onClick={() => setSelectedTicketId(row.ticket.id)}
+                    className="btn btn-primary mx-auto mt-1 inline-flex h-7 w-7 items-center justify-center text-white"
+                    style={{ padding: 0 }}
+                    onClick={() => setIsChatListOpen(true)}
+                    aria-label="Развернуть чаты"
                   >
-                    <div className="mb-2 flex items-start justify-between gap-2">
-                      <div className="truncate text-sm font-semibold">{deriveUserDisplay(row.chat)}</div>
-                      {aiAutoReply ? <span className="ai-dot" title="AI отвечает автоматически" /> : null}
-                    </div>
-
-                    <div className="line-clamp-2 text-sm text-[var(--muted)]">{row.snippet}</div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-1">
-                      <span
-                        className={`badge ${
-                          row.ticket.status_code === 'closed'
-                            ? 'badge-danger'
-                            : row.ticket.status_code === 'pending_human'
-                              ? 'badge-success'
-                              : 'badge-accent'
-                        }`}
-                      >
-                        {formatTicketStatus(row.ticket.status_code)}
-                      </span>
-                      <span className="badge badge-muted">{toHumanDate(row.lastMessageAt)}</span>
-                    </div>
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 text-white" aria-hidden="true">
+                      <path
+                        d="M8.5 4.5 15.5 12l-7 7.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="3.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
                   </button>
-                );
-              })}
 
-              {filteredRows.length === 0 ? (
-                <div className="rounded-xl bg-[var(--bg-soft)] p-4 text-sm text-[var(--muted)]">
-                  Ничего не найдено.
+                  <div className="scrollbar-thin mt-2 flex flex-1 flex-col items-center gap-2 overflow-y-auto pb-1 pt-1">
+                    {filteredRows.map((row) => {
+                      const isActive = selectedTicketId === row.ticket.id;
+                      const avatar = (row.chat?.user_id?.[0] ?? '?').toUpperCase();
+                      const statusClass =
+                        row.ticket.status_code === 'closed'
+                          ? 'border-[var(--danger)]'
+                          : row.ticket.status_code === 'pending_human'
+                            ? 'border-[var(--success)]'
+                            : 'border-[var(--accent)]';
+                      const hasUnread = row.ticket.status_code !== 'closed';
+
+                      return (
+                        <button
+                          key={`mini-${row.ticket.id}`}
+                          className={`relative flex h-9 w-9 items-center justify-center rounded-full border text-[11px] font-semibold ${
+                            isActive
+                              ? 'bg-[var(--accent-soft)] text-[var(--text)]'
+                              : 'bg-[var(--panel-solid)] text-[var(--muted)] hover:bg-[var(--bg-soft)]'
+                          } ${statusClass}`}
+                          title={`${deriveUserDisplay(row.chat)} • ${row.snippet}`}
+                          onClick={() => {
+                            shouldJumpToBottomRef.current = true;
+                            setSelectedTicketId(row.ticket.id);
+                          }}
+                          aria-label={`Открыть чат ${deriveUserDisplay(row.chat)}`}
+                        >
+                          <span>{avatar}</span>
+                          {hasUnread ? (
+                            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[var(--accent)] ring-2 ring-[var(--panel-solid)]" />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              ) : null}
+              </section>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <button
-                className="btn inline-flex items-center gap-1 text-sm"
-                disabled={ticketPage <= 1}
-                onClick={() => setTicketPage((prev) => Math.max(1, prev - 1))}
-              >
-                <ChevronLeft size={14} />
-                Назад
-              </button>
-
-              <div className="text-xs text-[var(--muted)]">Страница {ticketPage}</div>
-
-              <button
-                className="btn inline-flex items-center gap-1 text-sm"
-                disabled={ticketPage * PAGE_SIZE >= ticketTotal}
-                onClick={() => setTicketPage((prev) => prev + 1)}
-              >
-                Вперёд
-                <ChevronRight size={14} />
-              </button>
-            </div>
-          </section>
-
-          <section className="surface fade-in-up min-h-0 overflow-hidden p-3">
+            <section className="surface fade-in-up min-h-0 overflow-hidden p-3">
             {!selectedRow ? (
               <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
-                Выберите диалог слева
+                <div className="flex flex-col items-center gap-3">
+                  <div>Выберите диалог слева</div>
+                  {isChatModalViewport ? (
+                    <button className="btn text-xs" onClick={() => setIsChatListOpen(true)}>
+                      Открыть чаты
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : (
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="mb-3 rounded-2xl bg-[var(--panel-solid)] p-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-base font-semibold">
-                          {ticketDetails?.title ?? selectedRow.ticket.title ?? 'Без названия'}
+              <div className={`flex h-full min-h-0 ${isSuggestionsOpen ? 'gap-2' : 'gap-0'}`}>
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div className="mb-2 rounded-xl bg-[var(--panel-solid)] px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="truncate text-sm font-semibold">
+                            {ticketDetails?.title ?? selectedRow.ticket.title ?? 'Без названия'}
+                          </div>
+                          <span className="badge badge-muted">
+                            {translateMode((chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist')}
+                          </span>
                         </div>
-                        <span
-                          className={`badge ${
-                            selectedRow.ticket.status_code === 'closed'
-                              ? 'badge-danger'
-                              : selectedRow.ticket.status_code === 'pending_human'
-                                ? 'badge-success'
-                                : 'badge-accent'
-                          }`}
+                        <div className="mt-0.5 truncate text-xs text-[var(--muted)]">
+                          {deriveUserDisplay(chatDetails ?? selectedRow.chat)}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {isChatModalViewport ? (
+                          <button className="btn px-2.5 py-1.5 text-xs" onClick={() => setIsChatListOpen(true)}>
+                            Чаты
+                          </button>
+                        ) : null}
+                        <select
+                          className="field h-9 min-w-[155px] border-2 border-[var(--accent)] bg-[var(--panel-solid)] py-1.5 text-xs font-medium shadow-[0_0_0_1px_rgba(47,125,244,0.24)]"
+                          value={(chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist'}
+                          onChange={(event) => onChangeChatMode(event.target.value as ChatModeCode, 'mode_selected')}
                         >
-                          {formatTicketStatus(selectedRow.ticket.status_code)}
-                        </span>
-                        <span className="badge badge-muted">
-                          {translateMode((chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist')}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-sm text-[var(--muted)]">{deriveUserDisplay(chatDetails ?? selectedRow.chat)}</div>
-                    </div>
+                          <option value="full_ai">AI ведёт диалог</option>
+                          <option value="no_ai">Без AI</option>
+                        </select>
 
-                    <div className="flex flex-wrap gap-2">
-                      <select
-                        className="field min-w-[180px]"
-                        value={(chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist'}
-                        onChange={(event) => onChangeChatMode(event.target.value as ChatModeCode, 'mode_selected')}
-                      >
-                        <option value="full_ai">AI ведёт диалог</option>
-                        <option value="ai_assist">AI помогает оператору</option>
-                        <option value="no_ai">Без AI</option>
-                      </select>
-                      <button
-                        className="btn"
-                        onClick={() => onQuickAction('handoff_human')}
-                        disabled={selectedRow.ticket.status_code === 'closed'}
-                      >
-                        Передать человеку
-                      </button>
-                      <button className="btn" onClick={() => onQuickAction('return_ai')}>
-                        Вернуть AI
-                      </button>
+                        <button className="btn px-2.5 py-1.5 text-xs" onClick={() => setIsSuggestionsOpen((prev) => !prev)}>
+                          {isSuggestionsOpen ? 'Скрыть варианты' : 'Показать варианты'}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-[var(--bg-soft)]">
-                  <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3">
-                    <div className="text-sm font-semibold">Переписка</div>
-                    {isLoadingTicketCard ? (
-                      <div className="inline-flex items-center gap-1 text-xs text-[var(--muted)]">
-                        <Loader2 size={13} className="animate-spin" />
-                        Загрузка...
-                      </div>
-                    ) : null}
-                  </div>
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-[var(--bg-soft)]">
+                    <div ref={timelineRef} className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4">
+                      <div className="flex w-full flex-col gap-3">
+                        {timelineItems.map((item) => {
+                          if (item.kind === 'message') {
+                            const sender = messageSenderLabel(item.message.entity);
+                            const isClient = item.message.entity === 'user';
+                            const isAi = item.message.entity === 'ai_operator';
 
-                  <div
-                    ref={timelineRef}
-                    onScroll={onTimelineScroll}
-                    className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4"
-                  >
-                    <div className="mx-auto flex max-w-[860px] flex-col gap-3">
-                      {timelineItems.map((item) => {
-                        if (item.kind === 'message') {
-                          const sender = messageSenderLabel(item.message.entity);
-                          const isClient = item.message.entity === 'user';
-                          const isAi = item.message.entity === 'ai_operator';
+                            return (
+                              <div key={item.id} className={`flex ${isClient ? 'justify-start' : 'justify-end'}`}>
+                                <div
+                                  className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${
+                                    isClient
+                                      ? 'bg-[var(--panel-solid)] text-[var(--text)]'
+                                      : isAi
+                                        ? 'bg-[rgba(47,125,244,0.14)] text-[var(--text)]'
+                                        : 'bg-[rgba(15,159,101,0.14)] text-[var(--text)]'
+                                  }`}
+                                >
+                                  <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-[var(--muted)]">
+                                    <span className="font-medium">{sender}</span>
+                                    <span>{toChatTimeLabel(item.ts)}</span>
+                                  </div>
+                                  <div className="whitespace-pre-wrap text-sm leading-6">{item.message.text}</div>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          const isModeEvent =
+                            item.label.startsWith('chat_mode_changed:') || item.label.startsWith('chat_mode_set:');
 
                           return (
-                            <div key={item.id} className={`flex ${isClient ? 'justify-start' : 'justify-end'}`}>
-                              <div
-                                className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${
-                                  isClient
-                                    ? 'bg-[var(--panel-solid)] text-[var(--text)]'
-                                    : isAi
-                                      ? 'bg-[rgba(47,125,244,0.14)] text-[var(--text)]'
-                                      : 'bg-[rgba(15,159,101,0.14)] text-[var(--text)]'
-                                }`}
-                              >
-                                <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-[var(--muted)]">
-                                  <span className="font-medium">{sender}</span>
-                                  <span>{toHumanDate(item.ts)}</span>
-                                </div>
-                                <div className="whitespace-pre-wrap text-sm leading-6">{item.message.text}</div>
+                            <div key={item.id} className="flex justify-center">
+                              <div className="max-w-[80%] rounded-full bg-[var(--panel-solid)] px-3 py-1.5 text-center text-xs text-[var(--muted)]">
+                                {isModeEvent
+                                  ? translateEventLabel(item.label)
+                                  : `${translateEventLabel(item.label)} • ${item.actor} • ${toChatTimeLabel(item.ts)}`}
                               </div>
                             </div>
                           );
-                        }
+                        })}
 
-                        return (
-                          <div key={item.id} className="flex justify-center">
-                            <div className="max-w-[80%] rounded-full bg-[var(--panel-solid)] px-3 py-1.5 text-center text-xs text-[var(--muted)]">
-                              {translateEventLabel(item.label)} • {item.actor} • {toHumanDate(item.ts)}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {timelineItems.length === 0 ? (
-                        <div className="rounded-2xl bg-[var(--panel-solid)] p-4 text-sm text-[var(--muted)]">
-                          Сообщений пока нет.
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="sticky bottom-0 z-10 border-t border-[var(--line)] bg-[var(--panel-solid)] p-3">
-                    <div className="mx-auto max-w-[860px]">
-                      <textarea
-                        className="field min-h-[98px] resize-y"
-                        placeholder="Введите сообщение клиенту"
-                        value={composerText}
-                        onChange={(event) => setComposerText(event.target.value)}
-                      />
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button className="btn" onClick={onGenerateSuggestions} disabled={isLoadingSuggestions}>
-                          <Brain size={14} />
-                          {isLoadingSuggestions ? 'Генерируем...' : 'Подсказки'}
-                        </button>
-                        <button
-                          className="btn btn-primary inline-flex items-center gap-1"
-                          onClick={onSendMessage}
-                          disabled={isSendingMessage || !composerText.trim()}
-                        >
-                          {isSendingMessage ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                          Отправить
-                        </button>
-                      </div>
-
-                      <div className="mt-3 space-y-2">
-                        {!isLoadingSuggestions && suggestions.length === 0 ? (
-                          <div className="rounded-xl bg-[var(--bg-soft)] px-3 py-2 text-xs text-[var(--muted)]">
-                            Подсказки появятся после нажатия кнопки «Подсказки».
+                        {timelineItems.length === 0 ? (
+                          <div className="rounded-2xl bg-[var(--panel-solid)] p-4 text-sm text-[var(--muted)]">
+                            Сообщений пока нет.
                           </div>
                         ) : null}
+                      </div>
+                    </div>
 
-                        {suggestions.map((suggestion, index) => (
-                          <div key={suggestion.id} className="rounded-xl bg-[var(--bg-soft)] p-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                className="btn text-left text-xs"
-                                onClick={() => onUseSuggestion(suggestion.text)}
-                              >
-                                Вариант {index + 1}
-                              </button>
-                              <button
-                                className="btn text-xs"
-                                onClick={() => onToggleSuggestionSources(suggestion.id)}
-                              >
-                                {expandedSourcesSuggestionId === suggestion.id ? 'Скрыть источники' : 'Откуда этот источник'}
-                              </button>
-                            </div>
+                    <div className="sticky bottom-0 z-10 border-t border-[var(--line)] bg-[var(--panel-solid)] p-3">
+                      <div className="mx-auto max-w-[860px]">
+                        <div className="flex items-end gap-2">
+                          <button
+                            className="btn flex gap-1 px-2.5 py-2 text-xs"
+                            onClick={onGenerateSuggestions}
+                            disabled={isLoadingSuggestions}
+                          >
+                            <Brain size={14} />
+                            {isLoadingSuggestions ? 'Генерируем...' : 'AI'}
+                          </button>
 
-                            <div className="mt-2 line-clamp-2 whitespace-pre-wrap text-xs text-[var(--muted)]">
-                              {suggestion.text}
-                            </div>
+                          <textarea
+                            className="min-h-[98px] w-full flex-1 resize-y rounded-xl border border-[var(--line)] bg-transparent px-3 py-2 text-sm text-[var(--text)] outline-none transition focus:border-[var(--accent)] focus:shadow-[0_0_0_2px_rgba(47,125,244,0.2)]"
+                            placeholder="Введите сообщение клиенту"
+                            value={composerText}
+                            onChange={(event) => setComposerText(event.target.value)}
+                            onKeyDown={onComposerKeyDown}
+                          />
 
-                            {expandedSourcesSuggestionId === suggestion.id ? (
-                              <div className="mt-2 space-y-2">
-                                {(suggestion.citations ?? []).map((citation) => (
-                                  <div key={`${suggestion.id}-${citation.chunk_id}`} className="rounded-lg bg-[var(--panel-solid)] p-2 text-xs">
-                                    <div>Документ: {docNameById[citation.document_id] ?? citation.document_id}</div>
-                                    <div>Фрагмент: {citation.chunk_id}</div>
-                                    <div>Оценка: {citation.score.toFixed(3)}</div>
-                                  </div>
-                                ))}
-                                {(suggestion.citations ?? []).length === 0 ? (
-                                  <div className="rounded-lg bg-[var(--panel-solid)] p-2 text-xs text-[var(--muted)]">
-                                    Для этого варианта источники не найдены.
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        ))}
+                          <button
+                            className="btn btn-primary inline-flex items-center gap-1 px-3 py-2 text-xs"
+                            onClick={onSendMessage}
+                            disabled={isSendingMessage || !composerText.trim()}
+                          >
+                            {isSendingMessage ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                            Отправить
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                <div
+                  className={`hidden overflow-hidden transition-[width,opacity,transform] duration-300 xl:block ${
+                    isSuggestionsOpen ? 'w-[290px] opacity-100 translate-x-0' : 'w-0 opacity-0 translate-x-6 pointer-events-none'
+                  }`}
+                >
+                  <aside className="soft-surface h-full min-h-0 w-[290px] overflow-hidden p-2">{suggestionsContent}</aside>
+                </div>
               </div>
             )}
-          </section>
+            </section>
+          </div>
+
+          <div
+            className={`fixed inset-0 z-30 transition-opacity duration-300 lg:hidden ${
+              isChatModalViewport && isChatListOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
+            }`}
+          >
+            <button className="absolute inset-0 bg-black/40" onClick={() => setIsChatListOpen(false)} aria-label="Закрыть список чатов" />
+            <div
+              className={`absolute left-0 top-0 h-full w-[88vw] max-w-[360px] transform p-2 transition-transform duration-300 ${
+                isChatModalViewport && isChatListOpen ? 'translate-x-0' : '-translate-x-full'
+              }`}
+            >
+              <section className="surface flex h-full min-h-0 flex-col p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold">Диалоги</div>
+                  <button className="btn px-2 py-1 text-xs" onClick={() => setIsChatListOpen(false)}>
+                    Закрыть
+                  </button>
+                </div>
+                {chatListContent}
+              </section>
+            </div>
+          </div>
+
+          <div
+            className={`fixed inset-0 z-40 transition-opacity duration-300 xl:hidden ${
+              isCompactViewport && isSuggestionsOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
+            }`}
+          >
+            <button className="absolute inset-0 bg-black/40" onClick={() => setIsSuggestionsOpen(false)} aria-label="Закрыть варианты ответа" />
+            <div
+              className={`absolute right-0 top-0 h-full w-[88vw] max-w-[360px] transform p-2 transition-transform duration-300 ${
+                isCompactViewport && isSuggestionsOpen ? 'translate-x-0' : 'translate-x-full'
+              }`}
+            >
+              <aside className="surface h-full min-h-0 overflow-hidden p-2">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold">Варианты ответа</div>
+                  <button className="btn px-2 py-1 text-xs" onClick={() => setIsSuggestionsOpen(false)}>
+                    Закрыть
+                  </button>
+                </div>
+                {suggestionsContent}
+              </aside>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -1480,7 +1940,7 @@ export default function SupportWorkspacePage() {
 
             <button
               className="btn inline-flex items-center gap-1 text-sm"
-              disabled={kbPage * PAGE_SIZE >= kbTotal || isKbLoading}
+              disabled={kbPage * KB_PAGE_SIZE >= kbTotal || isKbLoading}
               onClick={() => setKbPage((prev) => prev + 1)}
             >
               Вперёд
@@ -1560,6 +2020,286 @@ export default function SupportWorkspacePage() {
               </div>
             </div>
           </div>
+        </section>
+      ) : null}
+
+      {section === 'analytics' ? (
+        <section className="surface fade-in-up min-h-[540px] p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold">Аналитика</div>
+              <div className="text-xs text-[var(--muted)]">
+                Короткий дашборд по ключевым метрикам
+                {analyticsReport ? ` • обновлено ${toHumanDate(analyticsReport.generated_at)}` : ''}
+              </div>
+            </div>
+            <button className="btn btn-primary inline-flex items-center gap-1 text-xs" onClick={() => loadAnalytics(false)}>
+              {isAnalyticsLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
+              Обновить
+            </button>
+          </div>
+
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="soft-surface flex items-center gap-1 p-1">
+              <button className="btn px-2 py-1 text-xs" onClick={() => onApplyAnalyticsPreset(1)}>
+                24ч
+              </button>
+              <button className="btn px-2 py-1 text-xs" onClick={() => onApplyAnalyticsPreset(7)}>
+                7д
+              </button>
+              <button className="btn px-2 py-1 text-xs" onClick={() => onApplyAnalyticsPreset(30)}>
+                30д
+              </button>
+            </div>
+
+            <button className="btn px-2 py-1 text-xs" onClick={() => setIsAnalyticsRangeOpen((prev) => !prev)}>
+              {isAnalyticsRangeOpen ? 'Скрыть даты' : 'Точный период'}
+            </button>
+          </div>
+
+          {isAnalyticsRangeOpen ? (
+            <div className="mb-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-[220px_220px_auto] xl:items-center">
+              <input
+                type="datetime-local"
+                className="field py-2 text-xs"
+                value={analyticsFromInput}
+                onChange={(event) => setAnalyticsFromInput(event.target.value)}
+              />
+              <input
+                type="datetime-local"
+                className="field py-2 text-xs"
+                value={analyticsToInput}
+                onChange={(event) => setAnalyticsToInput(event.target.value)}
+              />
+              <button className="btn text-xs" onClick={() => loadAnalytics(false)}>
+                Применить период
+              </button>
+            </div>
+          ) : null}
+
+          {analyticsError ? (
+            <div className="mb-3 rounded-xl bg-[rgba(209,70,70,0.13)] px-3 py-2 text-sm text-[var(--danger)]">
+              {analyticsError}
+            </div>
+          ) : null}
+
+          {isAnalyticsLoading && !analyticsReport ? (
+            <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
+              <Loader2 size={14} className="animate-spin" />
+              Загружаем отчёт...
+            </div>
+          ) : null}
+
+          {analyticsReport ? (
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <AnalyticsKpiCard
+                  title="Тикеты за период"
+                  value={formatCompactNumber(analyticsReport.tickets.opened_in_period)}
+                  hint={`Закрыто: ${formatCompactNumber(analyticsReport.tickets.closed_in_period)}`}
+                />
+                <AnalyticsKpiCard
+                  title="Сообщения за период"
+                  value={formatCompactNumber(analyticsReport.messages.in_period)}
+                  hint={`Среднее на тикет: ${analyticsReport.messages.avg_per_ticket?.toFixed(1) ?? '—'}`}
+                />
+                <AnalyticsKpiCard
+                  title="AI закрытие"
+                  value={formatPercent(analyticsReport.ai_performance.resolution_rate)}
+                  hint={`Эскалация: ${formatPercent(analyticsReport.ai_performance.escalation_rate)}`}
+                />
+                <AnalyticsKpiCard
+                  title="RAG hit rate"
+                  value={formatPercent(analyticsReport.rag.retrieval.hit_rate)}
+                  hint={`Событий: ${formatCompactNumber(analyticsReport.rag.retrieval.events_in_period)}`}
+                />
+              </div>
+
+              <div className="relative rounded-xl bg-[var(--bg-soft)] p-1">
+                <span
+                  className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-lg bg-[var(--accent)] shadow-[0_8px_20px_rgba(47,125,244,0.3)] transition-transform duration-300 ease-out"
+                  style={{
+                    width: `calc((100% - 8px) / ${ANALYTICS_VIEWS.length})`,
+                    transform: `translateX(${activeAnalyticsViewIndex * 100}%)`
+                  }}
+                />
+                <div
+                  className="relative z-10 grid"
+                  style={{ gridTemplateColumns: `repeat(${ANALYTICS_VIEWS.length}, minmax(0, 1fr))` }}
+                >
+                  {ANALYTICS_VIEWS.map((tab) => (
+                    <button
+                      key={tab.key}
+                      className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors duration-200 ${
+                        analyticsView === tab.key ? 'text-white' : 'text-[var(--muted)] hover:text-[var(--text)]'
+                      }`}
+                      onClick={() => setAnalyticsView(tab.key)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {analyticsView === 'overview' ? (
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <AnalyticsChartCard title="Статусы тикетов">
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={analyticsTicketStatusData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86}>
+                            {analyticsTicketStatusData.map((item, index) => (
+                              <Cell key={`ticket-status-${item.name}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(value) => formatCompactNumber(Number(value))} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="Кто отправлял сообщения">
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={analyticsMessagesData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.2)" />
+                          <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} />
+                          <Tooltip formatter={(value) => formatCompactNumber(Number(value))} />
+                          <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                            {analyticsMessagesData.map((item, index) => (
+                              <Cell key={`messages-${item.name}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="Пользователи за период">
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={analyticsUserData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.2)" />
+                          <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} />
+                          <Tooltip formatter={(value) => formatCompactNumber(Number(value))} />
+                          <Bar dataKey="value" fill={CHART_COLORS[0]} radius={[8, 8, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="Время решения">
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="rounded-lg bg-[var(--panel-solid)] p-2">
+                        <div className="text-[var(--muted)]">Среднее</div>
+                        <div className="mt-1 text-sm font-semibold">
+                          {formatDurationShort(analyticsReport.tickets.avg_resolution_time_seconds)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-[var(--panel-solid)] p-2">
+                        <div className="text-[var(--muted)]">P50</div>
+                        <div className="mt-1 text-sm font-semibold">
+                          {formatDurationShort(analyticsReport.tickets.resolution_time_p50_seconds)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-[var(--panel-solid)] p-2">
+                        <div className="text-[var(--muted)]">P95</div>
+                        <div className="mt-1 text-sm font-semibold">
+                          {formatDurationShort(analyticsReport.tickets.resolution_time_p95_seconds)}
+                        </div>
+                      </div>
+                    </div>
+                  </AnalyticsChartCard>
+                </div>
+              ) : null}
+
+              {analyticsView === 'ai' ? (
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <AnalyticsChartCard title="Эффективность AI" subtitle="Проценты за выбранный период">
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={analyticsAiRatesData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.2)" />
+                          <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                          <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 12 }} />
+                          <Tooltip formatter={(value) => `${Number(value)}%`} />
+                          <Bar dataKey="value" radius={[8, 8, 0, 0]} fill={CHART_COLORS[1]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="Распределение режимов чатов">
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={analyticsModeData} dataKey="value" nameKey="name" innerRadius={56} outerRadius={86}>
+                            {analyticsModeData.map((item, index) => (
+                              <Cell key={`mode-${item.name}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(value) => formatCompactNumber(Number(value))} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="Ключевые AI метрики">
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <AnalyticsKpiCard
+                        title="Закрыто AI"
+                        value={formatCompactNumber(analyticsReport.ai_performance.tickets_closed_by_ai)}
+                      />
+                      <AnalyticsKpiCard
+                        title="Эскалаций"
+                        value={formatCompactNumber(analyticsReport.ai_performance.tickets_escalated_to_human)}
+                      />
+                      <AnalyticsKpiCard
+                        title="Сообщений до эскалации"
+                        value={analyticsReport.ai_performance.avg_messages_before_escalation?.toFixed(1) ?? '—'}
+                      />
+                    </div>
+                  </AnalyticsChartCard>
+                </div>
+              ) : null}
+
+              {analyticsView === 'knowledge' ? (
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <AnalyticsChartCard title="Ingestion по документам">
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={analyticsIngestionData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.2)" />
+                          <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} />
+                          <Tooltip formatter={(value) => formatCompactNumber(Number(value))} />
+                          <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                            {analyticsIngestionData.map((item, index) => (
+                              <Cell key={`ingestion-${item.name}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </AnalyticsChartCard>
+
+                  <AnalyticsChartCard title="RAG состояние">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <AnalyticsKpiCard title="Документов" value={formatCompactNumber(analyticsReport.rag.total_documents)} />
+                      <AnalyticsKpiCard title="Активных документов" value={formatCompactNumber(analyticsReport.rag.active_documents)} />
+                      <AnalyticsKpiCard title="Активных чанков" value={formatCompactNumber(analyticsReport.rag.total_chunks)} />
+                      <AnalyticsKpiCard
+                        title="Средний score"
+                        value={analyticsReport.rag.retrieval.avg_score?.toFixed(2) ?? '—'}
+                      />
+                    </div>
+                  </AnalyticsChartCard>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       ) : null}
     </main>
