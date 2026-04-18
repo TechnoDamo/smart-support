@@ -1,0 +1,7 @@
+include:
+  - ./postgres/docker-compose.yml
+  - ./qdrant/docker-compose.yml
+  - ./minio/docker-compose.yml
+  - ./embedding/docker-compose.yml
+  - ./llm/docker-compose.yml
+  - ./backend/docker-compose.yml
