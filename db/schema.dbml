@@ -1,0 +1,160 @@
+Project smart_support {
+  database_type: 'PostgreSQL'
+  Note: 'Transactional DB in PostgreSQL. Vector data in Qdrant.'
+}
+
+Enum entity_type {
+  user
+  ai_operator
+  operator
+}
+
+Table channels {
+  id uuid [pk]
+  code varchar(32) [not null, unique, note: 'telegram']
+  name varchar(100) [not null]
+  description text
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table chat_modes {
+  id uuid [pk]
+  code varchar(32) [not null, unique, note: 'full_ai | no_ai | ai_assist']
+  name varchar(100) [not null]
+  description text
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table ticket_statuses {
+  id uuid [pk]
+  code varchar(32) [not null, unique, note: 'pending_ai | pending_human | closed']
+  name varchar(100) [not null]
+  description text
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table users {
+  id uuid [pk]
+  telegram_id bigint [not null, unique]
+  first_name varchar(100)
+  last_name varchar(100)
+  username varchar(100)
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+}
+
+Table chats {
+  id uuid [pk]
+  channel_id uuid [not null, ref: > channels.id]
+  telegram_chat_id bigint [not null, unique]
+  user_id uuid [not null, ref: > users.id]
+  mode_id uuid [not null, ref: > chat_modes.id]
+  time_started timestamptz [not null, default: `now()`]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    user_id
+    mode_id
+  }
+}
+
+Table tickets {
+  id uuid [pk]
+  chat_id uuid [not null, ref: > chats.id]
+  title varchar(255)
+  status_id uuid [not null, ref: > ticket_statuses.id]
+  time_started timestamptz [not null, default: `now()`]
+  time_closed timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    chat_id
+    status_id
+    (chat_id, time_started)
+  }
+
+  Note: 'Business rule: only one active ticket per chat at a time. Enforce in SQL with partial unique index on (chat_id) where status in pending_ai/pending_human.'
+}
+
+Table messages {
+  id uuid [pk]
+  chat_id uuid [not null, ref: > chats.id]
+  ticket_id uuid [not null, ref: > tickets.id]
+  entity entity_type [not null]
+  seq int [not null, note: 'Sequence unique inside one chat']
+  text text [not null]
+  time timestamptz [not null, default: `now()`]
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (chat_id, seq) [unique]
+    ticket_id
+    (chat_id, time)
+  }
+}
+
+Table chat_mode_events {
+  id uuid [pk]
+  chat_id uuid [not null, ref: > chats.id]
+  from_mode_id uuid [ref: > chat_modes.id]
+  to_mode_id uuid [not null, ref: > chat_modes.id]
+  changed_by entity_type [not null]
+  changed_by_user_id uuid [ref: > users.id, note: 'Null for AI/system changes']
+  reason text
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    chat_id
+    created_at
+  }
+}
+
+Table ticket_status_events {
+  id uuid [pk]
+  ticket_id uuid [not null, ref: > tickets.id]
+  from_status_id uuid [ref: > ticket_statuses.id]
+  to_status_id uuid [not null, ref: > ticket_statuses.id]
+  changed_by entity_type [not null]
+  changed_by_user_id uuid [ref: > users.id, note: 'Null for AI/system changes']
+  reason text
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    ticket_id
+    created_at
+  }
+}
+
+Table rag_documents {
+  id uuid [pk]
+  source_type varchar(32) [not null, note: 'telegram_upload for now']
+  source_name varchar(255) [not null]
+  storage_url text
+  uploaded_by_user_id uuid [ref: > users.id]
+  created_at timestamptz [not null, default: `now()`]
+  deleted_at timestamptz
+
+  indexes {
+    deleted_at
+  }
+}
+
+Table rag_document_chunks {
+  id uuid [pk]
+  document_id uuid [not null, ref: > rag_documents.id]
+  chunk_index int [not null]
+  chunk_text text [not null]
+  qdrant_point_id uuid [not null, unique]
+  metadata jsonb
+  created_at timestamptz [not null, default: `now()`]
+  deleted_at timestamptz
+
+  indexes {
+    (document_id, chunk_index) [unique]
+    deleted_at
+  }
+
+  Note: 'Vector embedding is stored in Qdrant by qdrant_point_id.'
+}
