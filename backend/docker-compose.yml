@@ -1,0 +1,85 @@
+services:
+  migrate:
+    build: .
+    container_name: smart-support-migrate
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart}
+      PROMPTS_DIR: /app/prompts
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - smart-support
+
+  api:
+    build: .
+    container_name: smart-support-api
+    ports:
+      - "${APP_PORT:-8081}:8081"
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8081
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-${OPENAI_API_KEY:-}}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-${OPENAI_API_KEY:-}}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_VECTOR_SIZE: ${EMBEDDING_VECTOR_SIZE:-1536}
+      VECTOR_STORE_PROVIDER: ${VECTOR_STORE_PROVIDER:-qdrant}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      OBJECT_STORAGE_PROVIDER: ${OBJECT_STORAGE_PROVIDER:-local}
+      OBJECT_STORAGE_LOCAL_PATH: /app/storage
+      S3_BUCKET: ${S3_BUCKET:-smart-support}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      CHANNEL_TELEGRAM_PROVIDER: ${CHANNEL_TELEGRAM_PROVIDER:-mock}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-false}
+      TELEGRAM_POLLING_LIMIT: ${TELEGRAM_POLLING_LIMIT:-50}
+      TELEGRAM_POLLING_TIMEOUT_SECONDS: ${TELEGRAM_POLLING_TIMEOUT_SECONDS:-0}
+      TELEGRAM_POLLING_REQUEST_TIMEOUT_SECONDS: ${TELEGRAM_POLLING_REQUEST_TIMEOUT_SECONDS:-35}
+      DEFAULT_CHAT_MODE: ${DEFAULT_CHAT_MODE:-ai_assist}
+      OUTBOX_MAX_RETRIES: ${OUTBOX_MAX_RETRIES:-5}
+      OUTBOX_RETRY_INTERVAL_SECONDS: ${OUTBOX_RETRY_INTERVAL_SECONDS:-30}
+      RAG_RETRIEVAL_TOP_K: ${RAG_RETRIEVAL_TOP_K:-5}
+      RAG_RETRIEVAL_MIN_SCORE: ${RAG_RETRIEVAL_MIN_SCORE:-0.2}
+      RAG_CHUNK_SIZE_TOKENS: ${RAG_CHUNK_SIZE_TOKENS:-400}
+      RAG_CHUNK_OVERLAP_TOKENS: ${RAG_CHUNK_OVERLAP_TOKENS:-60}
+      RAG_INGESTION_MAX_RETRIES: ${RAG_INGESTION_MAX_RETRIES:-3}
+      RAG_INGESTION_JOB_TIMEOUT_SECONDS: ${RAG_INGESTION_JOB_TIMEOUT_SECONDS:-120}
+      RAG_INGESTION_WORKER_BATCH_SIZE: ${RAG_INGESTION_WORKER_BATCH_SIZE:-10}
+      RAG_HYBRID_DENSE_WEIGHT: ${RAG_HYBRID_DENSE_WEIGHT:-0.7}
+      RAG_HYBRID_SPARSE_WEIGHT: ${RAG_HYBRID_SPARSE_WEIGHT:-0.3}
+      SCHEDULER_TICKET_CLOSE_INTERVAL_SECONDS: ${SCHEDULER_TICKET_CLOSE_INTERVAL_SECONDS:-60}
+      SCHEDULER_OUTBOX_INTERVAL_SECONDS: ${SCHEDULER_OUTBOX_INTERVAL_SECONDS:-10}
+      SCHEDULER_INGESTION_RETRY_INTERVAL_SECONDS: ${SCHEDULER_INGESTION_RETRY_INTERVAL_SECONDS:-120}
+      SCHEDULER_TELEGRAM_POLLING_INTERVAL_SECONDS: ${SCHEDULER_TELEGRAM_POLLING_INTERVAL_SECONDS:-5}
+      PROMPTS_DIR: /app/prompts
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+    networks:
+      - smart-support
+
+networks:
+  smart-support:
+    name: smart-support
+    driver: bridge
