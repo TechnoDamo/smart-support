@@ -1,0 +1,74 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_LEFT_RIGHT()
+
+title Smart Support - C4 Component Diagram (Backend Container)
+skinparam nodesep 600    ' Horizontal space between nodes on the same rank
+skinparam ranksep 800    ' Vertical space between ranks (layers)
+' People
+Person(customer, "Пользователь", "Задает вопросы в службу поддержки")
+Person(operator_human, "Оператор-Человек", "Отвечает на вопрос пользователей (может использовать помощь ИИ в ответах)")
+Component(operator_ai, "Оператор-ИИ", "HTTP клиент", "Отвечает на вопрос пользователей")
+
+System_Ext(telegram_api, "Telegram API", "Получение/передача сообщений пользователей в ТГ боте")
+System_Ext(other_client_vendors_api, "API других вендоров", "МАX, чаты на сайтиах и.т.п")
+
+System_Ext(llm_provider, "Провайдер LLM", "Может быть облачным либо развернут в локальном контуре")
+System_Ext(embedding_provider, "Провайдер Эмбедингов", "Может быть облачным либо развернут в локальном контуре")
+System_Ext(object_storage, "Объектное хранилище", "Хранение исходных файлов документации")
+
+Container_Ext(operator_ui, "UI для оператора-человека", "Веб приложение", "Работа с чатами/тикетами/системными документами")
+ContainerDb_Ext(postgres, "PostgreSQL", "Реляционная БД", "Все данные системы, кроме векторных предсатвлений данных")
+ContainerDb_Ext(qdrant, "Qdrant", "Векторная БД", "Векторные представления документации-контекста для ИИ")
+
+System_Boundary(smart_support, "Контур системы") {
+  Container_Boundary(backend, "Бэкенд API Core") {
+    Component(api_module, "API Маршрутизтор", "FastAPI", "Распределение http запросов по модулям")
+    Component(telegram_adapter, "Адаптор сообщений из Telegram", "Polling/Webhook запросы Telegram", "Сбор и обработка (форматирование) сообщений из ТГ")
+    Component(future_adapters, "Адапторы сообщений из других платформ", "Адапторы", "MAX / чаты на сайтах / другое")
+
+    Component(product_module, "Модуль обработки чатов/тикетов/сообщений", "Продуктовая логика", "Управление чатами, тикетами и сообщениями")
+    Component(ai_orchestrator, "ИИ оркестратор", "Внутренний ИИ агент", "принимает решение о передаче тикета оператору-человеку")
+    Component(rag_retrieval_service, "Модуль поиска рекоммендаций к ответу", "RAG модуль", "Находит наиболее актуальные данные для ответа")
+    Component(rag_ingestion_worker, "Модуль обработки загружаемых документов", "Обработка документов", "осуществляет парсинг и эмбеддинг докумнетации")
+    Component(outbox, "Модуль исходящих сообщений", "Исходящие сообщения", "Управляет сохранением/отправкой исходящих сообщений")
+    Component(analytics, "Аналитический модуль", "Анализ данных", "Управляет построением аналитических отчетов по работе системы")
+    Component(scheduler, "Модуль планировщик", "Scheduler", "Запускает периодичные задачи")
+
+    Component(config_env, "Конфигурация", "Настройки", "Конфигурация/настройки рантайма")
+  }
+}
+
+Rel(customer, telegram_api, "Отправка сообщений телеграм боту")
+Rel(customer, other_client_vendors_api, "Отправка сообщений через альтернативные каналы коммуникции")
+Rel(operator_human, operator_ui, "Работа с тикетами/чатами/системными документами")
+
+Rel(operator_ui, api_module, "REST запросы", "HTTPS")
+Rel(telegram_api, telegram_adapter, "Webhook", "Телеграм отправляет обновление бэкенду")
+Rel(telegram_adapter, telegram_api, "Poll request", "Бэкенд забирает обновления у Телеграма")
+Rel(other_client_vendors_api, future_adapters, "Webhook", "Обновление отправляется на бэкенд (в зависимости от реализации)")
+Rel(future_adapters, other_client_vendors_api, "Poll request", "Бэкенд сам забирает обновления (в зависимости от реализации)")
+Rel(operator_ai, api_module, "REST запросы", "HTTPS")
+
+Rel(api_module, product_module, "")
+Rel(api_module, rag_ingestion_worker, "")
+Rel(api_module, analytics, "")
+Rel(api_module, rag_retrieval_service, "")
+
+Rel(product_module, outbox,"")
+Rel(product_module, ai_orchestrator,"")
+Rel(ai_orchestrator, operator_ai, "")
+
+Rel(ai_orchestrator, llm_provider, "")
+Rel(rag_ingestion_worker, embedding_provider, "")
+Rel(rag_ingestion_worker, qdrant, "")
+Rel(rag_ingestion_worker, postgres, "")Rel(rag_ingestion_worker, postgres, "")
+Rel(rag_ingestion_worker, object_storage, "")
+Rel(rag_retrieval_service, embedding_provider, "")
+Rel(rag_retrieval_service, qdrant, "")
+Rel(rag_retrieval_service, postgres, "")
+Rel(outbox, telegram_api, "")
+Rel(outbox, other_client_vendors_api, "")
+
+@enduml

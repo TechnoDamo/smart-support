@@ -14,6 +14,7 @@ tags:
   - name: Подсказки
   - name: Настройки
   - name: RAG
+  - name: Аналитика
 
 paths:
   /tickets:
@@ -337,6 +338,35 @@ paths:
                     type: string
                     enum: [queued, processing, done, failed]
 
+  /analytics/report:
+    get:
+      tags: [Аналитика]
+      summary: Получить аналитический отчёт
+      description: |
+        Возвращает сводный отчёт по всей системе за указанный период.
+        Каждый объект в ответе соответствует отдельному разделу аналитики.
+        Если параметры периода не указаны — данные за последние 7 дней.
+      parameters:
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+          description: Начало периода (включительно)
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+          description: Конец периода (включительно)
+      responses:
+        '200':
+          description: Аналитический отчёт
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsReport'
+
   /rag/documents/{document_id}:
     delete:
       tags: [RAG]
@@ -646,3 +676,202 @@ components:
           type: integer
         total:
           type: integer
+
+    AnalyticsReport:
+      type: object
+      required: [generated_at, period, tickets, messages, ai_performance, rag, users]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+          description: Момент формирования отчёта
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+        tickets:
+          $ref: '#/components/schemas/AnalyticsTickets'
+        messages:
+          $ref: '#/components/schemas/AnalyticsMessages'
+        ai_performance:
+          $ref: '#/components/schemas/AnalyticsAiPerformance'
+        rag:
+          $ref: '#/components/schemas/AnalyticsRag'
+        users:
+          $ref: '#/components/schemas/AnalyticsUsers'
+
+    AnalyticsTickets:
+      description: Статистика по тикетам
+      type: object
+      required: [total, by_status, opened_in_period, closed_in_period]
+      properties:
+        total:
+          type: integer
+          description: Всего тикетов в системе
+        by_status:
+          type: object
+          required: [pending_ai, pending_human, closed]
+          properties:
+            pending_ai:
+              type: integer
+            pending_human:
+              type: integer
+            closed:
+              type: integer
+        opened_in_period:
+          type: integer
+          description: Открыто тикетов за период
+        closed_in_period:
+          type: integer
+          description: Закрыто тикетов за период
+        avg_resolution_time_seconds:
+          type: number
+          nullable: true
+          description: Среднее время закрытия тикета (сек), null если нет закрытых тикетов
+        resolution_time_p50_seconds:
+          type: number
+          nullable: true
+          description: Медианное время закрытия (сек)
+        resolution_time_p95_seconds:
+          type: number
+          nullable: true
+          description: 95-й перцентиль времени закрытия (сек)
+
+    AnalyticsMessages:
+      description: Статистика по сообщениям
+      type: object
+      required: [total, in_period, by_entity, avg_per_ticket]
+      properties:
+        total:
+          type: integer
+          description: Всего сообщений в системе
+        in_period:
+          type: integer
+          description: Сообщений за период
+        by_entity:
+          type: object
+          required: [user, ai_operator, operator]
+          description: Разбивка по отправителю (все данные за период)
+          properties:
+            user:
+              type: integer
+            ai_operator:
+              type: integer
+            operator:
+              type: integer
+        avg_per_ticket:
+          type: number
+          nullable: true
+          description: Среднее число сообщений на тикет (по тикетам периода)
+
+    AnalyticsAiPerformance:
+      description: Эффективность ИИ-оператора
+      type: object
+      required:
+        - tickets_closed_by_ai
+        - tickets_escalated_to_human
+        - resolution_rate
+        - escalation_rate
+        - chat_mode_distribution
+      properties:
+        tickets_closed_by_ai:
+          type: integer
+          description: Тикеты, закрытые ИИ за период
+        tickets_escalated_to_human:
+          type: integer
+          description: Тикеты, переданные оператору-человеку за период (pending_ai → pending_human)
+        resolution_rate:
+          type: number
+          format: float
+          description: Доля тикетов, закрытых ИИ (0–1)
+        escalation_rate:
+          type: number
+          format: float
+          description: Доля тикетов, переданных человеку (0–1)
+        avg_messages_before_escalation:
+          type: number
+          nullable: true
+          description: Среднее число сообщений до передачи тикета оператору
+        chat_mode_distribution:
+          type: object
+          required: [full_ai, ai_assist, no_ai]
+          description: Текущее распределение режимов по всем чатам
+          properties:
+            full_ai:
+              type: integer
+            ai_assist:
+              type: integer
+            no_ai:
+              type: integer
+
+    AnalyticsRag:
+      description: Состояние базы знаний и качество RAG-поиска
+      type: object
+      required: [total_documents, active_documents, deleted_documents, total_chunks, ingestion_jobs, retrieval]
+      properties:
+        total_documents:
+          type: integer
+        active_documents:
+          type: integer
+        deleted_documents:
+          type: integer
+        total_chunks:
+          type: integer
+          description: Активных чанков во всех коллекциях
+        ingestion_jobs:
+          type: object
+          required: [queued, processing, done, failed]
+          description: Текущее состояние задач обработки документов
+          properties:
+            queued:
+              type: integer
+            processing:
+              type: integer
+            done:
+              type: integer
+            failed:
+              type: integer
+        retrieval:
+          type: object
+          required: [total_events, events_in_period, avg_score, hit_rate]
+          properties:
+            total_events:
+              type: integer
+              description: Всего RAG-запросов в системе
+            events_in_period:
+              type: integer
+              description: RAG-запросов за период
+            avg_score:
+              type: number
+              nullable: true
+              description: Средний score retrieved chunks за период
+            hit_rate:
+              type: number
+              nullable: true
+              format: float
+              description: Доля чанков, реально использованных в ответе (used_in_answer=true), за период (0–1)
+
+    AnalyticsUsers:
+      description: Статистика по пользователям
+      type: object
+      required: [total, new_in_period, returning_users_in_period, avg_tickets_per_user]
+      properties:
+        total:
+          type: integer
+          description: Всего пользователей в системе
+        new_in_period:
+          type: integer
+          description: Новых пользователей за период (первое появление в системе)
+        returning_users_in_period:
+          type: integer
+          description: Пользователей, уже существовавших до периода и активных в нём
+        avg_tickets_per_user:
+          type: number
+          nullable: true
+          description: Среднее число тикетов на пользователя (по всем данным)
