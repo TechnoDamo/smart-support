@@ -34,11 +34,9 @@ import {
 } from 'recharts';
 
 import { supportApi, supportLabel } from '@/lib/api';
-import { supportMockApi } from '@/lib/mock';
 import {
   type AnalyticsReport,
   ApiError,
-  type ApiMode,
   type Chat,
   type ChatDetails,
   type ChatModeCode,
@@ -88,6 +86,14 @@ type TimelineItem =
       actor: string;
     };
 
+function isBackendConnectivityError(error: unknown): boolean {
+  // Ошибки 4xx означают, что backend ответил, значит соединение с ним есть.
+  if (error instanceof ApiError) {
+    return false;
+  }
+  return true;
+}
+
 const INBOX_TABS: ReadonlyArray<{ key: InboxTab; label: string }> = [
   { key: 'new', label: 'Новые' },
   { key: 'my', label: 'Активные' },
@@ -102,7 +108,7 @@ const NAV_SECTIONS: ReadonlyArray<{ key: NavSection; label: string }> = [
 ];
 
 const KB_PAGE_SIZE = 20;
-const INBOX_FETCH_SIZE = 500;
+const INBOX_FETCH_SIZE = 200;
 const POLL_MS = 4000;
 const LOCAL_SETTINGS_KEY = 'smart-support-local-settings-v1';
 const CHART_COLORS = ['#2f7df4', '#0f9f65', '#d78a00', '#d14646', '#7a8698'];
@@ -328,7 +334,6 @@ function AnalyticsChartCard({
 }
 
 export default function SupportWorkspacePage() {
-  const [apiMode, setApiMode] = useState<ApiMode>('mock');
   const [serverStatus, setServerStatus] = useState<ServerStatus>('unknown');
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
 
@@ -393,7 +398,7 @@ export default function SupportWorkspacePage() {
   const shouldJumpToBottomRef = useRef(false);
   const lastSeenMessageKeyByTicketRef = useRef<Record<string, string>>({});
 
-  const api = useMemo(() => (apiMode === 'mock' ? supportMockApi : supportApi), [apiMode]);
+  const api = supportApi;
 
   const selectedRow = useMemo(() => {
     if (!selectedTicketId) return null;
@@ -588,32 +593,58 @@ export default function SupportWorkspacePage() {
           return acc;
         }, {});
 
-        const uniqueChatIds = Array.from(new Set(ticketsResponse.items.map((item) => item.chat_id)));
+        const uniqueChatIds = Array.from(
+          new Set(
+            ticketsResponse.items
+              .map((item) => item.chat_id)
+              .filter((chatId) => Boolean(chatMap[chatId]))
+          )
+        );
 
-        const chatDetailSettled = await Promise.allSettled(uniqueChatIds.map((chatId) => api.getChat(chatId)));
+        const chatDetailSettled = await Promise.allSettled(
+          uniqueChatIds.map((chatId) =>
+            api
+              .getChat(chatId)
+              .then((details) => ({ chatId, details }))
+              .catch((error) => Promise.reject({ chatId, error }))
+          )
+        );
 
         const chatDetailsMap: Record<string, ChatDetails> = {};
+        const missingChatIds = new Set<string>();
         for (const result of chatDetailSettled) {
           if (result.status === 'fulfilled') {
-            chatDetailsMap[result.value.id] = result.value;
+            chatDetailsMap[result.value.chatId] = result.value.details;
+            continue;
+          }
+
+          const wrapped = result.reason as { chatId?: string; error?: unknown };
+          if (wrapped.chatId && wrapped.error instanceof ApiError && wrapped.error.status === 404) {
+            missingChatIds.add(wrapped.chatId);
           }
         }
 
-        const rows: TicketRow[] = ticketsResponse.items.map((ticket) => {
+        const rows: TicketRow[] = ticketsResponse.items.flatMap((ticket) => {
           const chat = chatMap[ticket.chat_id];
+          if (!chat || missingChatIds.has(ticket.chat_id)) {
+            return [];
+          }
+
           const chatDetails = chatDetailsMap[ticket.chat_id];
           const ticketMessages = (chatDetails?.messages ?? []).filter((message) => message.ticket_id === ticket.id);
           const lastMessage = ticketMessages[ticketMessages.length - 1];
           const lastMessageAt =
             lastMessage?.time ?? chatDetails?.updated_at ?? ticket.time_closed ?? ticket.time_started;
 
-          return {
-            ticket,
-            chat,
-            lastMessage,
-            lastMessageAt,
-            snippet: lastMessage?.text ?? ticket.summary ?? ticket.title ?? 'Без сообщений'
-          };
+          return [
+            {
+              ticket,
+              chat,
+              lastMessage,
+              lastMessageAt,
+              snippet: lastMessage?.text ?? ticket.summary ?? ticket.title ?? 'Без сообщений'
+            }
+          ];
         });
 
         rows.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
@@ -632,9 +663,7 @@ export default function SupportWorkspacePage() {
           setSelectedTicketId(null);
         }
 
-        if (apiMode === 'live') {
-          setServerStatus('online');
-        }
+        setServerStatus('online');
       } catch (error) {
         if (error instanceof ApiError) {
           setInboxError(error.message);
@@ -642,7 +671,7 @@ export default function SupportWorkspacePage() {
           setInboxError('Не удалось загрузить список диалогов');
         }
 
-        if (apiMode === 'live') {
+        if (isBackendConnectivityError(error)) {
           setServerStatus('offline');
         }
       } finally {
@@ -651,7 +680,7 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, apiMode, inboxTab, selectedTicketId, statusFilter]
+    [api, inboxTab, selectedTicketId, statusFilter]
   );
 
   const loadTicketCard = useCallback(
@@ -676,15 +705,21 @@ export default function SupportWorkspacePage() {
         setTicketDetails(ticketResponse);
         setChatDetails(chatResponse);
 
-        if (apiMode === 'live') {
-          setServerStatus('online');
-        }
+        setServerStatus('online');
       } catch (error) {
         if (!silent) {
           setInboxError(error instanceof Error ? error.message : 'Не удалось открыть диалог');
         }
 
-        if (apiMode === 'live') {
+        if (error instanceof ApiError && error.status === 404) {
+          setTicketDetails(null);
+          setChatDetails(null);
+          setSelectedTicketId((current) => (current === ticketId ? null : current));
+          setRawRows((prev) => prev.filter((item) => item.ticket.id !== ticketId));
+          return;
+        }
+
+        if (isBackendConnectivityError(error)) {
           setServerStatus('offline');
         }
       } finally {
@@ -693,7 +728,7 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, apiMode, rawRows]
+    [api, rawRows]
   );
 
   const loadKnowledgeBase = useCallback(
@@ -982,11 +1017,6 @@ export default function SupportWorkspacePage() {
   }, []);
 
   useEffect(() => {
-    if (apiMode === 'mock') {
-      setServerStatus('online');
-      return;
-    }
-
     let cancelled = false;
 
     (async () => {
@@ -1005,7 +1035,7 @@ export default function SupportWorkspacePage() {
     return () => {
       cancelled = true;
     };
-  }, [apiMode]);
+  }, []);
 
   useEffect(() => {
     loadInbox();
@@ -1013,22 +1043,32 @@ export default function SupportWorkspacePage() {
   }, [loadInbox, ensureDocNames]);
 
   useEffect(() => {
-    if (!selectedTicketId || section !== 'inbox') return;
+    if (section !== 'inbox') return;
+    if (!selectedTicketId) {
+      setTicketDetails(null);
+      setChatDetails(null);
+      return;
+    }
+
+    const selectedStillExists = rawRows.some((row) => row.ticket.id === selectedTicketId);
+    if (!selectedStillExists) {
+      setTicketDetails(null);
+      setChatDetails(null);
+      return;
+    }
+
     loadTicketCard(selectedTicketId);
-  }, [selectedTicketId, loadTicketCard, section]);
+  }, [selectedTicketId, rawRows, loadTicketCard, section]);
 
   useEffect(() => {
     if (section !== 'inbox') return;
 
     const timer = window.setInterval(() => {
       loadInbox(true);
-      if (selectedTicketId) {
-        loadTicketCard(selectedTicketId, true);
-      }
     }, POLL_MS);
 
     return () => window.clearInterval(timer);
-  }, [loadInbox, loadTicketCard, selectedTicketId, section]);
+  }, [loadInbox, section]);
 
   useEffect(() => {
     if (section !== 'knowledge') return;
@@ -1095,8 +1135,8 @@ export default function SupportWorkspacePage() {
   }, [chatDetails, selectedRow, selectedTicketId, selectedTicketMessages]);
 
   const onManualRefresh = useCallback(async () => {
-    await Promise.all([loadInbox(false), selectedTicketId ? loadTicketCard(selectedTicketId, false) : Promise.resolve()]);
-  }, [loadInbox, loadTicketCard, selectedTicketId]);
+    await loadInbox(false);
+  }, [loadInbox]);
 
   const onChangeChatMode = useCallback(
     async (nextMode: ChatModeCode, reason: string) => {
@@ -1499,21 +1539,6 @@ export default function SupportWorkspacePage() {
           </div>
 
           <div className="inline-flex items-center gap-2">
-            <div className="soft-surface flex items-center gap-1 p-1">
-              <button
-                className={`btn px-2.5 py-1 text-xs ${apiMode === 'mock' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setApiMode('mock')}
-              >
-                Тест
-              </button>
-              <button
-                className={`btn px-2.5 py-1 text-xs ${apiMode === 'live' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setApiMode('live')}
-              >
-                API
-              </button>
-            </div>
-
             <div className="soft-surface flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[var(--muted)]">
               {serverStatus === 'online' ? <Wifi size={13} /> : <WifiOff size={13} />}
               {serverStatus === 'online' ? 'Online' : serverStatus === 'offline' ? 'Offline' : 'Проверка'}

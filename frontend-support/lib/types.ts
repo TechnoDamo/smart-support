@@ -1,4 +1,3 @@
-export type ApiMode = 'live' | 'mock';
 export type ThemeMode = 'system' | 'light' | 'dark';
 
 export type TicketStatusCode = 'pending_ai' | 'pending_human' | 'pending_user' | 'closed';

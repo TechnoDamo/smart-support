@@ -12,7 +12,7 @@ import {
 } from '@/lib/types';
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_SUPPORT_API_BASE_URL ?? 'http://127.0.0.1:8081/api/v1';
+  process.env.NEXT_PUBLIC_SUPPORT_API_BASE_URL ?? 'http://127.0.0.1:8081';
 
 type ApiErrorPayload = {
   error?: {
@@ -89,7 +89,7 @@ export const supportApi: SupportApi = {
     const query = buildQuery({
       page: params?.page ?? 1,
       page_size: params?.page_size ?? 20,
-      status: params?.status
+      status_code: params?.status
     });
 
     return requestJson<TicketListResponse>(`/tickets${query}`);

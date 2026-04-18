@@ -41,6 +41,7 @@ async def _ticket_to_schema(session: AsyncSession, t: Ticket) -> TicketSchema:
 async def list_tickets(
     session: AsyncSession = DbSession,
     status_code: str | None = Query(None),
+    status: str | None = Query(None),
     chat_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -48,8 +49,9 @@ async def list_tickets(
     stmt = select(Ticket).order_by(Ticket.time_started.desc())
     if chat_id is not None:
         stmt = stmt.where(Ticket.chat_id == chat_id)
-    if status_code:
-        status_id = await get_ticket_status_id(session, status_code)
+    effective_status = status_code or status
+    if effective_status:
+        status_id = await get_ticket_status_id(session, effective_status)
         stmt = stmt.where(Ticket.status_id == status_id)
 
     # total
