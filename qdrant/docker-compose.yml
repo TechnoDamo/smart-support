@@ -1,0 +1,28 @@
+# Qdrant — векторное хранилище для гибридного RAG-поиска (dense + sparse).
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    container_name: smart-support-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      # Qdrant читает опциональный API key, если задан
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    networks:
+      - smart-support
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  qdrant_data:
+
+networks:
+  smart-support:
+    name: smart-support
+    driver: bridge
