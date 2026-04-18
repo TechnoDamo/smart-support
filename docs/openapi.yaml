@@ -1,0 +1,645 @@
+openapi: 3.0.3
+info:
+  title: Smart Support Operator API
+  version: 1.0.0
+  description: |
+    Human operator API for tickets, chats, messaging, AI suggestions, and RAG documents.
+servers:
+  - url: http://127.0.0.1:8081/api/v1
+
+tags:
+  - name: Tickets
+  - name: Chats
+  - name: Messages
+  - name: Suggestions
+  - name: Settings
+  - name: RAG
+
+paths:
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: List tickets
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/TicketStatusCode'
+      responses:
+        '200':
+          description: Ticket list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketListResponse'
+
+  /tickets/{ticket_id}:
+    get:
+      tags: [Tickets]
+      summary: Get ticket details
+      parameters:
+        - $ref: '#/components/parameters/TicketId'
+      responses:
+        '200':
+          description: Ticket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketDetails'
+    patch:
+      tags: [Tickets]
+      summary: Rename ticket
+      parameters:
+        - $ref: '#/components/parameters/TicketId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+      responses:
+        '200':
+          description: Ticket renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, title, updated_at]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  title:
+                    type: string
+                  updated_at:
+                    type: string
+                    format: date-time
+
+  /chats:
+    get:
+      tags: [Chats]
+      summary: List chats
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+        - in: query
+          name: mode_code
+          schema:
+            $ref: '#/components/schemas/ChatModeCode'
+      responses:
+        '200':
+          description: Chat list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatListResponse'
+
+  /chats/{chat_id}:
+    get:
+      tags: [Chats]
+      summary: Get chat details
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      responses:
+        '200':
+          description: Chat details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatDetails'
+
+  /chats/{chat_id}/mode:
+    post:
+      tags: [Chats]
+      summary: Change chat mode
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to_mode_code]
+              properties:
+                to_mode_code:
+                  $ref: '#/components/schemas/ChatModeCode'
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Mode changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chat_id, mode_code, changed_at]
+                properties:
+                  chat_id:
+                    type: string
+                    format: uuid
+                  mode_code:
+                    $ref: '#/components/schemas/ChatModeCode'
+                  changed_at:
+                    type: string
+                    format: date-time
+
+  /chats/{chat_id}/messages:
+    post:
+      tags: [Messages]
+      summary: Send message to user
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id, text]
+              properties:
+                ticket_id:
+                  type: string
+                  format: uuid
+                text:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+
+  /chats/{chat_id}/suggestions:
+    post:
+      tags: [Suggestions]
+      summary: Get AI suggestions
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id]
+              properties:
+                ticket_id:
+                  type: string
+                  format: uuid
+                draft_context:
+                  type: string
+                max_suggestions:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                  default: 3
+      responses:
+        '200':
+          description: Suggestions list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suggestions]
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Suggestion'
+
+  /settings/default-new-ticket-mode:
+    put:
+      tags: [Settings]
+      summary: Set default mode for new tickets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode_code]
+              properties:
+                mode_code:
+                  $ref: '#/components/schemas/ChatModeCode'
+      responses:
+        '200':
+          description: Default mode updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode_code, updated_at]
+                properties:
+                  mode_code:
+                    $ref: '#/components/schemas/ChatModeCode'
+                  updated_at:
+                    type: string
+                    format: date-time
+
+  /rag/documents:
+    get:
+      tags: [RAG]
+      summary: List RAG documents
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+        - in: query
+          name: include_deleted
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: RAG documents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RagDocumentListResponse'
+    post:
+      tags: [RAG]
+      summary: Upload RAG document
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [source_type, source_name, file]
+              properties:
+                source_type:
+                  type: string
+                  enum: [telegram_upload]
+                source_name:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Upload accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [document_id, ingestion_job_id, status]
+                properties:
+                  document_id:
+                    type: string
+                    format: uuid
+                  ingestion_job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued, processing, done, failed]
+
+  /rag/documents/{document_id}:
+    delete:
+      tags: [RAG]
+      summary: Delete RAG document (soft-delete)
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [document_id, deleted_at]
+                properties:
+                  document_id:
+                    type: string
+                    format: uuid
+                  deleted_at:
+                    type: string
+                    format: date-time
+
+components:
+  parameters:
+    TicketId:
+      in: path
+      name: ticket_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ChatId:
+      in: path
+      name: chat_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DocumentId:
+      in: path
+      name: document_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    TicketStatusCode:
+      type: string
+      enum: [pending_ai, pending_human, closed]
+
+    ChatModeCode:
+      type: string
+      enum: [full_ai, no_ai, ai_assist]
+
+    ActorEntity:
+      type: string
+      enum: [user, operator, ai_operator]
+
+    Ticket:
+      type: object
+      required: [id, status_code, chat_id, time_started]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status_code:
+          $ref: '#/components/schemas/TicketStatusCode'
+        chat_id:
+          type: string
+          format: uuid
+        time_started:
+          type: string
+          format: date-time
+        time_closed:
+          type: string
+          format: date-time
+          nullable: true
+
+    TicketStatusEvent:
+      type: object
+      required: [to_status_code, changed_by, created_at]
+      properties:
+        from_status_code:
+          allOf:
+            - $ref: '#/components/schemas/TicketStatusCode'
+          nullable: true
+        to_status_code:
+          $ref: '#/components/schemas/TicketStatusCode'
+        changed_by:
+          $ref: '#/components/schemas/ActorEntity'
+        changed_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    TicketDetails:
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            status_events:
+              type: array
+              items:
+                $ref: '#/components/schemas/TicketStatusEvent'
+
+    TicketListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    Chat:
+      type: object
+      required: [id, telegram_chat_id, user_id, channel, mode_code, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        telegram_chat_id:
+          type: integer
+          format: int64
+        user_id:
+          type: string
+          format: uuid
+        channel:
+          $ref: '#/components/schemas/Channel'
+        mode_code:
+          $ref: '#/components/schemas/ChatModeCode'
+        active_ticket_id:
+          type: string
+          format: uuid
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    ChatListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    Channel:
+      type: object
+      required: [id, code, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          example: telegram
+        name:
+          type: string
+
+    ChatModeEvent:
+      type: object
+      required: [to_mode_code, changed_by, created_at]
+      properties:
+        from_mode_code:
+          allOf:
+            - $ref: '#/components/schemas/ChatModeCode'
+          nullable: true
+        to_mode_code:
+          $ref: '#/components/schemas/ChatModeCode'
+        changed_by:
+          $ref: '#/components/schemas/ActorEntity'
+        changed_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Message:
+      type: object
+      required: [id, chat_id, ticket_id, entity, seq, text, time]
+      properties:
+        id:
+          type: string
+          format: uuid
+        chat_id:
+          type: string
+          format: uuid
+        ticket_id:
+          type: string
+          format: uuid
+        entity:
+          $ref: '#/components/schemas/ActorEntity'
+        seq:
+          type: integer
+        text:
+          type: string
+        time:
+          type: string
+          format: date-time
+
+    ChatDetails:
+      allOf:
+        - $ref: '#/components/schemas/Chat'
+        - type: object
+          properties:
+            mode_events:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChatModeEvent'
+            messages:
+              type: array
+              items:
+                $ref: '#/components/schemas/Message'
+
+    Suggestion:
+      type: object
+      required: [id, text]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        confidence:
+          type: number
+          nullable: true
+        citations:
+          type: array
+          items:
+            type: object
+            required: [chunk_id, document_id, score]
+            properties:
+              chunk_id:
+                type: string
+                format: uuid
+              document_id:
+                type: string
+                format: uuid
+              score:
+                type: number
+
+    RagDocument:
+      type: object
+      required: [id, collection_id, source_type, source_name, current_version, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collection_id:
+          type: string
+          format: uuid
+        source_type:
+          type: string
+        source_name:
+          type: string
+        current_version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    RagDocumentListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RagDocument'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
