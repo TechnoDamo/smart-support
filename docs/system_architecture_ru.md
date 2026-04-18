@@ -62,6 +62,12 @@ make current
 make revision MESSAGE="описание изменения"
 ```
 
+Если backend запускается локально вне Docker, а сам Postgres поднят из папки `postgres/` или из корневого compose-стека, `DATABASE_URL` должен указывать на:
+
+```bash
+postgresql+asyncpg://smart:smart@localhost:5432/smart
+```
+
 Текущий принцип:
 
 - deploy-применение миграций делается отдельным контейнером `migrate`

@@ -33,7 +33,7 @@ sync: check-uv
 	$(UV_ENV) $(UV) sync --extra dev
 
 run: check-uv
-	$(UV_RUN) uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
+	$(UV_RUN) uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload --reload-dir app --reload-dir prompts --reload-exclude .venv --reload-exclude .uv-cache --reload-exclude storage
 
 test: check-uv
 	$(UV_RUN) pytest tests/ -q
