@@ -1,0 +1,42 @@
+services:
+  embedding:
+    profiles: ["local-ai", "local-embedding"]
+    image: vllm/vllm-openai:v0.6.3
+    container_name: smart-support-embedding
+    command: >
+      --model ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      --served-model-name ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      --task embedding
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+      --max-model-len ${EMBEDDING_MAX_MODEL_LEN:-512}
+    ports:
+      - "${EMBEDDING_PORT:-8090}:8000"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - smart-support
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  hf_cache:
+
+networks:
+  smart-support:
+    name: smart-support
+    driver: bridge

@@ -1,0 +1,31 @@
+services:
+  llm:
+    profiles: ["local-ai", "local-llm"]
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: smart-support-llm
+    command: >
+      -m ${LLM_MODEL:-/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf}
+      --host 0.0.0.0
+      --port 8080
+      -c ${LLM_CTX_SIZE:-4096}
+      -ngl ${LLM_N_GPU_LAYERS:-0}
+      -t ${LLM_THREADS:-8}
+      -b ${LLM_BATCH:-512}
+      --jinja
+    ports:
+      - "${LLM_PORT:-8091}:8080"
+    volumes:
+      - ${LLM_MODELS_DIR:-./models}:/models
+    networks:
+      - smart-support
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  smart-support:
+    name: smart-support
+    driver: bridge
