@@ -6,8 +6,8 @@
 
 ## Рабочая директория
 
-`backend/` в worktree `.claude/worktrees/ecstatic-mayer-f9b1fc/`.
-Ветка: `claude/ecstatic-mayer-f9b1fc`.
+`backend/` в основном репозитории `/Users/damir/Desktop/smart-support`.
+Ветка: `dev`.
 
 ## Общие требования (из диалога с пользователем)
 
@@ -27,8 +27,7 @@
 
 ### 1. Foundation ✅
 
-- ✅ `backend/requirements.txt` — fastapi, sqlalchemy[asyncio], asyncpg, aiosqlite, qdrant-client, rank-bm25, apscheduler, aioboto3, pytest, pytest-asyncio, httpx.
-- ✅ `backend/pyproject.toml` — `asyncio_mode = "auto"`.
+- ✅ `backend/pyproject.toml` — runtime/dev зависимости и `pytest`-настройки; `uv` является единственным менеджером Python-окружения.
 - ✅ `backend/.env.example` — вся конфигурация с русскими комментариями.
 - ✅ `backend/app/config.py` — Pydantic Settings + `@lru_cache get_settings()`.
 - ✅ `backend/app/prompts.py` — `load_prompt(name)` читает из `PROMPTS_DIR`.
@@ -96,14 +95,14 @@
 - ✅ `tests/test_analytics.py` — отчёт собирается и на пустой БД, и на заполненной.
 - ✅ `tests/test_api.py` — `/health`, `/analytics/report`, `/settings`, `/integrations/telegram/webhook`, `/rag/documents`.
 
-Запуск: `make test` или `.venv/bin/pytest tests/ -q`.
+Запуск: `make test` или `uv run pytest tests/ -q`.
 
 ### 8. Deployment ✅
 
-- ✅ `backend/Dockerfile` — Python 3.12 slim, uvicorn, каталог `/app/storage` для local-провайдера.
+- ✅ `backend/Dockerfile` — Python 3.12 slim, сборка окружения через `uv sync`, каталог `/app/storage` для local-провайдера.
 - ✅ `backend/docker-compose.yml` — `api` + `postgres:16` + `qdrant:v1.12.0`, healthcheck-и, volumes.
 - ✅ `backend/.dockerignore`, `backend/.gitignore`.
-- ✅ `backend/Makefile` — `make venv install run test up down logs clean`.
+- ✅ `backend/Makefile` — `make sync run test migrate current revision lock up down logs clean`.
 - ✅ `backend/README.md` — русские инструкции по быстрому старту, Docker, Telegram и конфигу.
 - ✅ Alembic подключён: схема создаётся миграциями, docker-стек применяет их через отдельный сервис `migrate`, `Base.metadata.create_all` из startup убран.
 
@@ -146,10 +145,11 @@
 - Per-module level overrides через `LOG_LEVELS="app.services.rag=DEBUG,..."`.
 - Папка `docs/logging/` (RU): обзор, Graylog compose snippet, troubleshooting.
 
-### C. Переход на uv 🚧
-- `pyproject.toml` с `[project.dependencies]` + `uv.lock`.
+### C. Переход на uv ✅
+- `pyproject.toml` хранит runtime/dev зависимости как единственный источник истины, `uv.lock` фиксирует разрешённый набор пакетов.
 - Dockerfile использует `uv` вместо pip.
-- `requirements.txt` генерируется через `uv pip compile` (для совместимости).
+- Локальная разработка идёт через `uv sync --extra dev` и `uv run ...`.
+- `requirements.txt` удалён, чтобы не было второго источника истины и дрейфа зависимостей.
 
 ### D. Folder-per-service deployment 🚧
 - `postgres/` — compose, README (RU), `schema.dbml` (копия).

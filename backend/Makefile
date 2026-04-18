@@ -1,45 +1,55 @@
-.PHONY: help venv install run test up down logs migrate revision current fmt clean
+.PHONY: help check-uv sync run test up down logs migrate revision current lock clean
 
-PY ?= python3.12
-VENV ?= .venv
-UVICORN ?= $(VENV)/bin/uvicorn
-ALEMBIC ?= $(VENV)/bin/alembic
+UV ?= $(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -x "$$HOME/.local/bin/uv" ]; then echo "$$HOME/.local/bin/uv"; else echo uv; fi)
+UV_CACHE_DIR ?= .uv-cache
+PYTHON_VERSION ?= 3.12
+UV_ENV := UV_CACHE_DIR=$(abspath $(UV_CACHE_DIR))
+UV_RUN := $(UV_ENV) $(UV) run
 
 help:
 	@echo "Цели:"
-	@echo "  make venv       — создать виртуальное окружение"
-	@echo "  make install    — установить зависимости"
+	@echo "  make sync       — создать .venv и синхронизировать зависимости через uv"
 	@echo "  make run        — запустить API локально (uvicorn)"
 	@echo "  make test       — запустить тесты"
 	@echo "  make migrate    — применить Alembic-миграции до head"
 	@echo "  make current    — показать текущую ревизию БД"
 	@echo "  make revision MESSAGE=... — создать новую миграцию"
+	@echo "  make lock       — обновить uv.lock"
 	@echo "  make up         — поднять docker-compose (api only)"
 	@echo "  make down       — остановить docker-compose"
 	@echo "  make logs       — логи API из docker-compose"
-	@echo "  make clean      — удалить кэши и venv"
+	@echo "  make clean      — удалить .venv и локальные кэши"
 
-venv:
-	$(PY) -m venv $(VENV)
+check-uv:
+	@if [ -x "$(UV)" ] || command -v "$(UV)" >/dev/null 2>&1; then \
+		true; \
+	else \
+		echo "uv не найден. Установите uv и повторите команду."; \
+		exit 1; \
+	fi
 
-install: venv
-	$(VENV)/bin/pip install -r requirements.txt
+sync: check-uv
+	$(UV_ENV) $(UV) venv --python $(PYTHON_VERSION) --clear
+	$(UV_ENV) $(UV) sync --extra dev
 
-run:
-	$(UVICORN) app.main:app --host 0.0.0.0 --port 8081 --reload
+run: check-uv
+	$(UV_RUN) uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 
-test:
-	$(VENV)/bin/pytest tests/ -q
+test: check-uv
+	$(UV_RUN) pytest tests/ -q
 
-migrate:
-	$(ALEMBIC) upgrade head
+migrate: check-uv
+	$(UV_RUN) alembic upgrade head
 
-current:
-	$(ALEMBIC) current
+current: check-uv
+	$(UV_RUN) alembic current
 
-revision:
+revision: check-uv
 	@test -n "$(MESSAGE)" || (echo "Используйте: make revision MESSAGE='описание'" && exit 1)
-	$(ALEMBIC) revision --autogenerate -m "$(MESSAGE)"
+	$(UV_RUN) alembic revision --autogenerate -m "$(MESSAGE)"
+
+lock: check-uv
+	$(UV_ENV) $(UV) lock
 
 up:
 	docker compose up -d --build
@@ -51,4 +61,5 @@ logs:
 	docker compose logs -f api
 
 clean:
-	rm -rf $(VENV) .pytest_cache **/__pycache__ **/**/__pycache__
+	rm -rf .venv .pytest_cache .mypy_cache htmlcov .coverage
+	find . -type d -name __pycache__ -prune -exec rm -rf {} +
