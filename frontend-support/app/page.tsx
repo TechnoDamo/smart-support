@@ -1338,27 +1338,17 @@ export default function SupportWorkspacePage() {
       </div>
 
       <div className="mb-3 grid grid-cols-1 gap-2">
-        <label className="relative">
+       
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+       
+        <label className="relative ">
           <input
-            className="field pl-8"
+            className="field !border !border-[rgba(47,125,244,0.36)] pl-8"
              placeholder="Поиск по чатам"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </label>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
-           <select
-            className="field"
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-          >
-            <option value="all">Все чаты</option>
-            <option value="pending_ai">Ожидают AI</option>
-            <option value="pending_human">Ожидают человека</option>
-            <option value="pending_user">Ожидают клиента</option>
-            <option value="closed">Без активного тикета</option>
-          </select>
 
           <button className="btn justify-center" onClick={onManualRefresh} aria-label="Обновить">
             <RefreshCcw size={14} />
