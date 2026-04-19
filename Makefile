@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps config pull restart up-cloud up-local-embedding up-local-llm up-local-ai up-mock up-minio
+.PHONY: help up down logs logs-graylog ps config pull restart up-cloud up-local-embedding up-local-llm up-local-ai up-mock up-minio up-graylog
 
 AI ?= cloud
 STORAGE ?= filesystem
@@ -22,6 +22,13 @@ ENV_ARGS += DATABASE_URL=postgresql+asyncpg://$${POSTGRES_USER:-smart}:$${POSTGR
 ENV_ARGS += QDRANT_URL=http://qdrant:6333
 ENV_ARGS += QDRANT_API_KEY=$${QDRANT_API_KEY:-}
 ENV_ARGS += PROMPTS_DIR=/app/prompts
+
+ifeq ($(GRAYLOG),true)
+ENV_ARGS += GRAYLOG_ENABLED=true
+ENV_ARGS += GRAYLOG_HOST=graylog
+ENV_ARGS += GRAYLOG_PORT=12201
+ENV_ARGS += GRAYLOG_PROTOCOL=tcp
+endif
 
 ifeq ($(STORAGE),filesystem)
 ENV_ARGS += OBJECT_STORAGE_PROVIDER=local
@@ -76,6 +83,7 @@ help:
 	@echo "  make up ... GRAYLOG=true                 — дополнительно поднять Graylog"
 	@echo "  make down                                — остановить весь стек"
 	@echo "  make logs                                — поток логов всех сервисов"
+	@echo "  make logs-graylog                        — поток логов Graylog/Mongo/Elasticsearch"
 	@echo "  make ps                                  — список контейнеров"
 	@echo "  make config AI=... STORAGE=...           — показать итоговую конфигурацию"
 	@echo ""
@@ -99,6 +107,9 @@ down:
 
 logs:
 	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) logs -f
+
+logs-graylog:
+	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) --profile graylog logs -f graylog mongodb elasticsearch
 
 ps:
 	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) ps
@@ -129,3 +140,6 @@ up-mock:
 
 up-minio:
 	@$(MAKE) up STORAGE=minio
+
+up-graylog:
+	@$(MAKE) up GRAYLOG=true

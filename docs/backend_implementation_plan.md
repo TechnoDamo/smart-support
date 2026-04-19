@@ -141,7 +141,7 @@
 - Structured JSON-логи, human-readable в dev.
 - Request-ID middleware (X-Request-ID).
 - Логирование сервисных операций на INFO, DB-операций на DEBUG.
-- Поддержка GELF UDP/TCP/HTTP с флагом `LOG_GRAYLOG_ENABLED`, дефолт — UDP.
+- Поддержка GELF UDP/TCP с флагами `GRAYLOG_ENABLED`, `GRAYLOG_HOST`, `GRAYLOG_PORT`, `GRAYLOG_PROTOCOL`.
 - Per-module level overrides через `LOG_LEVELS="app.services.rag=DEBUG,..."`.
 - Папка `docs/logging/` (RU): обзор, Graylog compose snippet, troubleshooting.
 
