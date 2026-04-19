@@ -28,7 +28,7 @@
 ### 1. Foundation ✅
 
 - ✅ `backend/pyproject.toml` — runtime/dev зависимости и `pytest`-настройки; `uv` является единственным менеджером Python-окружения.
-- ✅ `backend/.env.example` — вся конфигурация с русскими комментариями.
+- ✅ `/.env.example` — единый шаблон конфигурации всего проекта с русскими комментариями.
 - ✅ `backend/app/config.py` — Pydantic Settings + `@lru_cache get_settings()`.
 - ✅ `backend/app/prompts.py` — `load_prompt(name)` читает из `PROMPTS_DIR`.
 - ✅ `backend/prompts/ai_operator.txt` — системный промпт, JSON-ответ `{action, response_text, escalation_reason}`.

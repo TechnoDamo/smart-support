@@ -11,10 +11,39 @@
 - `minio/` — локальное S3-совместимое object storage.
 - `embedding/` — локальный OpenAI-совместимый embedding-сервер на vLLM.
 - `llm/` — локальный OpenAI-совместимый LLM-сервер на llama.cpp.
+- `graylog/` — централизованная система логирования с веб-интерфейсом.
 - `docker-compose.yml` — корневой orchestrator через `include:`.
 - `Makefile` — единая точка запуска всего стека с переключением локальных/облачных AI-компонентов и object storage.
 
 ## Быстрый запуск всей системы
+
+Перед запуском:
+
+```bash
+cp .env.example .env
+```
+
+Теперь `.env` в корне репозитория — единый источник конфигурации для всего проекта:
+- корневого `make up ...`;
+- локального запуска backend из `backend/`;
+- docker-compose сервисов.
+
+### Включение Graylog (централизованное логирование)
+
+Для включения Graylog добавьте в `.env`:
+```bash
+# Graylog Configuration
+GRAYLOG_ENABLED=true
+GRAYLOG_HOST=localhost
+GRAYLOG_PORT=12201
+GRAYLOG_PROTOCOL=tcp
+LOG_LEVEL=INFO
+LOG_FORMAT=json
+```
+
+Graylog будет доступен по адресу: http://localhost:19000
+- Логин: `admin`
+- Пароль: `admin`
 
 ### 1. Облачные AI-провайдеры + локальные файлы
 
@@ -81,3 +110,4 @@ make config AI=local-llm STORAGE=filesystem
 - [minio/README.md](/Users/damir/Desktop/smart-support/minio/README.md)
 - [embedding/README.md](/Users/damir/Desktop/smart-support/embedding/README.md)
 - [llm/README.md](/Users/damir/Desktop/smart-support/llm/README.md)
+- [graylog/README.md](/Users/damir/Desktop/smart-support/graylog/README.md)

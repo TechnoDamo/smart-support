@@ -18,7 +18,8 @@ import {
   Trash2,
   Upload,
   Wifi,
-  WifiOff
+  WifiOff,
+  MessageSquare
 } from 'lucide-react';
 import {
   Bar,
@@ -33,7 +34,7 @@ import {
   YAxis
 } from 'recharts';
 
-import { supportApi, supportLabel } from '@/lib/api';
+import { supportApi } from '@/lib/api';
 import {
   type AnalyticsReport,
   ApiError,
@@ -51,24 +52,15 @@ import {
 } from '@/lib/types';
 
 type NavSection = 'inbox' | 'knowledge' | 'settings' | 'analytics';
-type InboxTab = 'new' | 'my' | 'closed';
 type StatusFilter = TicketStatusCode | 'all';
 type AnalyticsView = 'overview' | 'ai' | 'knowledge';
 
-type TicketRow = {
-  ticket: Ticket;
-  chat?: Chat;
+type ChatRow = {
+  chat: Chat;
+  activeTicket?: Ticket | null;
   lastMessage?: Message;
   snippet: string;
   lastMessageAt: string;
-};
-
-type LocalTimelineEvent = {
-  id: string;
-  type: 'local';
-  label: string;
-  actor: 'operator' | 'ai_operator';
-  created_at: string;
 };
 
 type TimelineItem =
@@ -94,31 +86,18 @@ function isBackendConnectivityError(error: unknown): boolean {
   return true;
 }
 
-const INBOX_TABS: ReadonlyArray<{ key: InboxTab; label: string }> = [
-  { key: 'new', label: 'Новые' },
-  { key: 'my', label: 'Активные' },
-  { key: 'closed', label: 'Закрытые' }
-];
-
 const NAV_SECTIONS: ReadonlyArray<{ key: NavSection; label: string }> = [
-  { key: 'inbox', label: 'Диалоги' },
-  { key: 'knowledge', label: 'База знаний' },
-  { key: 'settings', label: 'Настройки' },
-  { key: 'analytics', label: 'Аналитика' }
+  { key: 'inbox', label: 'Inbox' },
+  { key: 'knowledge', label: 'Knowledge Base' },
+  { key: 'settings', label: 'Settings' },
+  { key: 'analytics', label: 'Analytics' }
 ];
 
 const KB_PAGE_SIZE = 20;
 const INBOX_FETCH_SIZE = 200;
-const POLL_MS = 4000;
+const POLL_MS = 30000; // 30 seconds instead of 4 seconds
 const LOCAL_SETTINGS_KEY = 'smart-support-local-settings-v1';
 const CHART_COLORS = ['#2f7df4', '#0f9f65', '#d78a00', '#d14646', '#7a8698'];
-
-function getId() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
 
 function toHumanDate(value?: string | null) {
   if (!value) return '—';
@@ -165,7 +144,7 @@ function toChatTimeLabel(value?: string | null) {
     });
   }
 
-  const weekdays = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   return weekdays[date.getDay()];
 }
 
@@ -190,20 +169,23 @@ function formatDurationShort(totalSeconds?: number | null) {
 }
 
 function formatTicketStatus(status: TicketStatusCode) {
-  return supportLabel.status(status);
+  if (status === 'pending_ai') return 'Ожидает AI';
+  if (status === 'pending_human') return 'Ожидает человека';
+  if (status === 'pending_user') return 'Ожидает клиента';
+  return 'Без активного тикета';
 }
 
 function actorLabel(actor: string) {
-  if (actor === 'user') return 'Клиент';
-  if (actor === 'operator') return 'Оператор';
+  if (actor === 'user') return 'Client';
+  if (actor === 'operator') return 'Operator';
   if (actor === 'ai_operator') return 'AI';
   return actor;
 }
 
 function messageSenderLabel(entity: Message['entity']) {
-  if (entity === 'user') return 'Клиент';
-  if (entity === 'ai_operator') return 'AI-оператор';
-  return 'Оператор';
+  if (entity === 'user') return 'Client';
+  if (entity === 'ai_operator') return 'AI Operator';
+  return 'Operator';
 }
 
 function parseFileExt(fileName: string) {
@@ -211,21 +193,30 @@ function parseFileExt(fileName: string) {
   return ext ? ext.toUpperCase() : '—';
 }
 
-function ticketStatusByTab(tab: InboxTab): TicketStatusCode | undefined {
-  if (tab === 'new') return 'pending_ai';
-  if (tab === 'closed') return 'closed';
-  return undefined;
+function getRowStatusCode(row: ChatRow): TicketStatusCode {
+  return row.activeTicket?.status_code ?? 'closed';
 }
 
 function deriveUserDisplay(chat?: Chat) {
-  if (!chat) return 'Неизвестный клиент';
+  if (!chat) return 'Unknown Client';
   const suffix = chat.user_id.slice(0, 8);
-  return `Клиент #${suffix}`;
+  return `Client #${suffix}`;
 }
 
-function mapModeFromAction(target: 'handoff_human' | 'return_ai'): ChatModeCode {
-  if (target === 'handoff_human') return 'no_ai';
-  return 'ai_assist';
+function getPlatformIcon(chat?: Chat) {
+  if (!chat) return null;
+  
+  // Check if it's a Telegram chat (telegram_chat_id is present)
+  if (chat.telegram_chat_id) {
+    return (
+      <div className="flex items-center gap-1 text-xs text-blue-500">
+        <MessageSquare size={12} />
+        <span>Telegram</span>
+      </div>
+    );
+  }
+  
+  return null;
 }
 
 function translateMode(mode: ChatModeCode) {
@@ -338,7 +329,6 @@ export default function SupportWorkspacePage() {
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
 
   const [section, setSection] = useState<NavSection>('inbox');
-  const [inboxTab, setInboxTab] = useState<InboxTab>('new');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [isChatListOpen, setIsChatListOpen] = useState(true);
@@ -349,11 +339,11 @@ export default function SupportWorkspacePage() {
   const [isLoadingInbox, setIsLoadingInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
 
-  const [rawRows, setRawRows] = useState<TicketRow[]>([]);
-  const [ticketTotal, setTicketTotal] = useState(0);
-  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [rawRows, setRawRows] = useState<ChatRow[]>([]);
+  const [chatTotal, setChatTotal] = useState(0);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
 
-  const [ticketDetails, setTicketDetails] = useState<TicketDetails | null>(null);
+  const [activeTicketDetails, setActiveTicketDetails] = useState<TicketDetails | null>(null);
   const [chatDetails, setChatDetails] = useState<ChatDetails | null>(null);
   const [isLoadingTicketCard, setIsLoadingTicketCard] = useState(false);
 
@@ -364,10 +354,10 @@ export default function SupportWorkspacePage() {
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [expandedSourcesSuggestionId, setExpandedSourcesSuggestionId] = useState<string | null>(null);
 
-  const [localEventsByTicket, setLocalEventsByTicket] = useState<Record<string, LocalTimelineEvent[]>>({});
   const [docNameById, setDocNameById] = useState<Record<string, string>>({});
 
-  const [ticketCounters, setTicketCounters] = useState({ pending_ai: 0, pending_human: 0, closed: 0 });
+  // Cache for chat details to avoid repeated API calls
+  const [chatDetailsCache, setChatDetailsCache] = useState<Record<string, { details: ChatDetails; timestamp: number }>>({});
 
   const [kbPage, setKbPage] = useState(1);
   const [kbIncludeDeleted, setKbIncludeDeleted] = useState(false);
@@ -396,19 +386,17 @@ export default function SupportWorkspacePage() {
 
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const shouldJumpToBottomRef = useRef(false);
-  const lastSeenMessageKeyByTicketRef = useRef<Record<string, string>>({});
+  const lastSeenMessageKeyByChatRef = useRef<Record<string, string>>({});
 
   const api = supportApi;
 
   const selectedRow = useMemo(() => {
-    if (!selectedTicketId) return null;
-    return rawRows.find((row) => row.ticket.id === selectedTicketId) ?? null;
-  }, [rawRows, selectedTicketId]);
+    if (!selectedChatId) return null;
+    return rawRows.find((row) => row.chat.id === selectedChatId) ?? null;
+  }, [rawRows, selectedChatId]);
 
-  const activeInboxTabIndex = useMemo(
-    () => Math.max(0, INBOX_TABS.findIndex((tab) => tab.key === inboxTab)),
-    [inboxTab]
-  );
+  const selectedActiveTicketId = selectedRow?.chat.active_ticket_id ?? null;
+  const isSelectedChatReadOnly = !selectedActiveTicketId;
 
   const activeSectionIndex = useMemo(
     () => Math.max(0, NAV_SECTIONS.findIndex((item) => item.key === section)),
@@ -418,31 +406,22 @@ export default function SupportWorkspacePage() {
   const filteredRows = useMemo(() => {
     let rows = [...rawRows];
 
-    if (inboxTab === 'my') {
-      rows = rows.filter((row) => row.ticket.status_code !== 'closed');
-    }
-    if (inboxTab === 'new') {
-      rows = rows.filter((row) => row.ticket.status_code === 'pending_ai');
-    }
-    if (inboxTab === 'closed') {
-      rows = rows.filter((row) => row.ticket.status_code === 'closed');
-    }
-
     if (statusFilter !== 'all') {
-      rows = rows.filter((row) => row.ticket.status_code === statusFilter);
+      rows = rows.filter((row) => getRowStatusCode(row) === statusFilter);
     }
 
     const normalizedSearch = search.trim().toLowerCase();
     if (normalizedSearch) {
       rows = rows.filter((row) => {
         const haystack = [
-          row.ticket.id,
-          row.ticket.title,
-          row.ticket.summary,
+          row.chat.id,
+          row.activeTicket?.id,
+          row.activeTicket?.title,
+          row.activeTicket?.summary,
           row.lastMessage?.text,
-          row.ticket.status_code,
-          row.chat?.channel.code,
-          row.chat?.channel.name
+          getRowStatusCode(row),
+          row.chat.channel.code,
+          row.chat.channel.name
         ]
           .filter(Boolean)
           .join(' ')
@@ -454,14 +433,13 @@ export default function SupportWorkspacePage() {
 
     rows.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
     return rows;
-  }, [rawRows, inboxTab, statusFilter, search]);
+  }, [rawRows, statusFilter, search]);
 
   const timelineItems = useMemo<TimelineItem[]>(() => {
-    if (!selectedTicketId) return [];
+    if (!selectedChatId) return [];
 
-    const messages = (chatDetails?.messages ?? []).filter((item) => item.ticket_id === selectedTicketId);
+    const messages = chatDetails?.messages ?? [];
     const modeEvents = chatDetails?.mode_events ?? [];
-    const localEvents = localEventsByTicket[selectedTicketId] ?? [];
 
     const all: TimelineItem[] = [];
 
@@ -485,27 +463,11 @@ export default function SupportWorkspacePage() {
       });
     }
 
-    for (const event of localEvents) {
-      if (event.label === 'rag_sources_attached' || event.label === 'ai_suggestions_generated') {
-        continue;
-      }
-      all.push({
-        id: event.id,
-        kind: 'event',
-        ts: event.created_at,
-        actor: actorLabel(event.actor),
-        label: event.label
-      });
-    }
-
     all.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
     return all;
-  }, [chatDetails?.messages, chatDetails?.mode_events, selectedTicketId, localEventsByTicket]);
+  }, [chatDetails?.messages, chatDetails?.mode_events, selectedChatId]);
 
-  const selectedTicketMessages = useMemo(() => {
-    if (!selectedTicketId) return [] as Message[];
-    return (chatDetails?.messages ?? []).filter((message) => message.ticket_id === selectedTicketId);
-  }, [chatDetails?.messages, selectedTicketId]);
+  const selectedChatMessages = useMemo(() => chatDetails?.messages ?? [], [chatDetails?.messages]);
 
   const kbCounters = useMemo(() => {
     const values = Object.values(ingestionStatusMap);
@@ -516,24 +478,6 @@ export default function SupportWorkspacePage() {
       failed: values.filter((value) => value === 'failed').length
     };
   }, [ingestionStatusMap]);
-
-  const addLocalEvent = useCallback(
-    (ticketId: string, label: string, actor: 'operator' | 'ai_operator' = 'operator') => {
-      const event: LocalTimelineEvent = {
-        id: getId(),
-        type: 'local',
-        label,
-        actor,
-        created_at: new Date().toISOString()
-      };
-
-      setLocalEventsByTicket((prev) => ({
-        ...prev,
-        [ticketId]: [...(prev[ticketId] ?? []), event]
-      }));
-    },
-    []
-  );
 
   const ensureDocNames = useCallback(async () => {
     try {
@@ -556,93 +500,95 @@ export default function SupportWorkspacePage() {
       setInboxError(null);
 
       try {
-        const statusFromTab = ticketStatusByTab(inboxTab);
-        const queryStatus = statusFilter === 'all' ? statusFromTab : statusFilter;
-
-        const basePromises: Array<Promise<unknown>> = [
-          api.listTickets({ page: 1, page_size: INBOX_FETCH_SIZE, status: queryStatus }),
-          api.listChats({ page: 1, page_size: 200 })
-        ];
-
-        if (!silent) {
-          basePromises.push(
-            api.listTickets({ page: 1, page_size: 1, status: 'pending_ai' }),
-            api.listTickets({ page: 1, page_size: 1, status: 'pending_human' }),
-            api.listTickets({ page: 1, page_size: 1, status: 'closed' })
-          );
-        }
-
-        const responses = await Promise.all(basePromises);
-        const ticketsResponse = responses[0] as Awaited<ReturnType<typeof api.listTickets>>;
-        const chatsResponse = responses[1] as Awaited<ReturnType<typeof api.listChats>>;
-
-        if (!silent) {
-          const aiTotal = (responses[2] as Awaited<ReturnType<typeof api.listTickets>>).total;
-          const humanTotal = (responses[3] as Awaited<ReturnType<typeof api.listTickets>>).total;
-          const closedTotal = (responses[4] as Awaited<ReturnType<typeof api.listTickets>>).total;
-
-          setTicketCounters({
-            pending_ai: aiTotal,
-            pending_human: humanTotal,
-            closed: closedTotal
-          });
-        }
-
-        const chatMap = chatsResponse.items.reduce<Record<string, Chat>>((acc, chat) => {
-          acc[chat.id] = chat;
-          return acc;
-        }, {});
-
-        const uniqueChatIds = Array.from(
+        const now = Date.now();
+        const chatsResponse = await api.listChats({ page: 1, page_size: INBOX_FETCH_SIZE });
+        const uniqueChatIds = chatsResponse.items.map((chat) => chat.id);
+        const uniqueActiveTicketIds = Array.from(
           new Set(
-            ticketsResponse.items
-              .map((item) => item.chat_id)
-              .filter((chatId) => Boolean(chatMap[chatId]))
-          )
-        );
-
-        const chatDetailSettled = await Promise.allSettled(
-          uniqueChatIds.map((chatId) =>
-            api
-              .getChat(chatId)
-              .then((details) => ({ chatId, details }))
-              .catch((error) => Promise.reject({ chatId, error }))
+            chatsResponse.items
+              .map((chat) => chat.active_ticket_id)
+              .filter((ticketId): ticketId is string => Boolean(ticketId))
           )
         );
 
         const chatDetailsMap: Record<string, ChatDetails> = {};
         const missingChatIds = new Set<string>();
-        for (const result of chatDetailSettled) {
-          if (result.status === 'fulfilled') {
-            chatDetailsMap[result.value.chatId] = result.value.details;
-            continue;
-          }
+        const chatIdsToFetch: string[] = [];
 
-          const wrapped = result.reason as { chatId?: string; error?: unknown };
-          if (wrapped.chatId && wrapped.error instanceof ApiError && wrapped.error.status === 404) {
-            missingChatIds.add(wrapped.chatId);
+        for (const chatId of uniqueChatIds) {
+          const cached = chatDetailsCache[chatId];
+          if (cached && (now - cached.timestamp < 60000)) {
+            chatDetailsMap[chatId] = cached.details;
+          } else {
+            chatIdsToFetch.push(chatId);
           }
         }
 
-        const rows: TicketRow[] = ticketsResponse.items.flatMap((ticket) => {
-          const chat = chatMap[ticket.chat_id];
-          if (!chat || missingChatIds.has(ticket.chat_id)) {
+        if (chatIdsToFetch.length > 0) {
+          const chatDetailSettled = await Promise.allSettled(
+            chatIdsToFetch.map((chatId) =>
+              api
+                .getChat(chatId)
+                .then((details) => ({ chatId, details }))
+                .catch((error) => Promise.reject({ chatId, error }))
+            )
+          );
+
+          const newCacheEntries: Record<string, { details: ChatDetails; timestamp: number }> = {};
+
+          for (const result of chatDetailSettled) {
+            if (result.status === 'fulfilled') {
+              const { chatId, details } = result.value;
+              chatDetailsMap[chatId] = details;
+              newCacheEntries[chatId] = { details, timestamp: now };
+              continue;
+            }
+
+            const wrapped = result.reason as { chatId?: string; error?: unknown };
+            if (wrapped.chatId && wrapped.error instanceof ApiError && wrapped.error.status === 404) {
+              missingChatIds.add(wrapped.chatId);
+            }
+          }
+
+          if (Object.keys(newCacheEntries).length > 0) {
+            setChatDetailsCache(prev => ({ ...prev, ...newCacheEntries }));
+          }
+        }
+
+        const activeTicketMap: Record<string, TicketDetails> = {};
+        if (uniqueActiveTicketIds.length > 0) {
+          const ticketSettled = await Promise.allSettled(
+            uniqueActiveTicketIds.map((ticketId) =>
+              api.getTicket(ticketId).then((ticket) => ({ ticketId, ticket }))
+            )
+          );
+
+          for (const result of ticketSettled) {
+            if (result.status === 'fulfilled') {
+              activeTicketMap[result.value.ticketId] = result.value.ticket;
+            }
+          }
+        }
+
+        const rows: ChatRow[] = chatsResponse.items.flatMap((chat) => {
+          if (missingChatIds.has(chat.id)) {
             return [];
           }
 
-          const chatDetails = chatDetailsMap[ticket.chat_id];
-          const ticketMessages = (chatDetails?.messages ?? []).filter((message) => message.ticket_id === ticket.id);
-          const lastMessage = ticketMessages[ticketMessages.length - 1];
+          const chatDetail = chatDetailsMap[chat.id];
+          const lastMessage = (chatDetail?.messages ?? []).at(-1);
+          const activeTicket =
+            chat.active_ticket_id ? activeTicketMap[chat.active_ticket_id] ?? null : null;
           const lastMessageAt =
-            lastMessage?.time ?? chatDetails?.updated_at ?? ticket.time_closed ?? ticket.time_started;
+            lastMessage?.time ?? chatDetail?.updated_at ?? activeTicket?.time_started ?? chat.updated_at;
 
           return [
             {
-              ticket,
               chat,
+              activeTicket,
               lastMessage,
               lastMessageAt,
-              snippet: lastMessage?.text ?? ticket.summary ?? ticket.title ?? 'Без сообщений'
+              snippet: lastMessage?.text ?? activeTicket?.summary ?? activeTicket?.title ?? 'No messages'
             }
           ];
         });
@@ -650,17 +596,17 @@ export default function SupportWorkspacePage() {
         rows.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
 
         setRawRows(rows);
-        setTicketTotal(ticketsResponse.total);
+        setChatTotal(chatsResponse.total);
 
         if (rows.length > 0) {
-          const hasCurrentSelection = Boolean(selectedTicketId) && rows.some((row) => row.ticket.id === selectedTicketId);
-          const nextSelectedTicketId = hasCurrentSelection ? selectedTicketId : rows[0].ticket.id;
-          if (nextSelectedTicketId && nextSelectedTicketId !== selectedTicketId) {
+          const hasCurrentSelection = Boolean(selectedChatId) && rows.some((row) => row.chat.id === selectedChatId);
+          const nextSelectedChatId = hasCurrentSelection ? selectedChatId : rows[0].chat.id;
+          if (nextSelectedChatId && nextSelectedChatId !== selectedChatId) {
             shouldJumpToBottomRef.current = true;
           }
-          setSelectedTicketId(nextSelectedTicketId);
+          setSelectedChatId(nextSelectedChatId);
         } else {
-          setSelectedTicketId(null);
+          setSelectedChatId(null);
         }
 
         setServerStatus('online');
@@ -668,7 +614,7 @@ export default function SupportWorkspacePage() {
         if (error instanceof ApiError) {
           setInboxError(error.message);
         } else {
-          setInboxError('Не удалось загрузить список диалогов');
+          setInboxError('Failed to load chat list');
         }
 
         if (isBackendConnectivityError(error)) {
@@ -680,14 +626,14 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, inboxTab, selectedTicketId, statusFilter]
+    [api, selectedChatId, chatDetailsCache]
   );
 
-  const loadTicketCard = useCallback(
-    async (ticketId: string, silent = false) => {
-      const row = rawRows.find((item) => item.ticket.id === ticketId);
+  const loadChatCard = useCallback(
+    async (chatId: string, silent = false) => {
+      const row = rawRows.find((item) => item.chat.id === chatId);
       if (!row) {
-        setTicketDetails(null);
+        setActiveTicketDetails(null);
         setChatDetails(null);
         return;
       }
@@ -697,12 +643,20 @@ export default function SupportWorkspacePage() {
       }
 
       try {
-        const [ticketResponse, chatResponse] = await Promise.all([
-          api.getTicket(ticketId),
-          api.getChat(row.ticket.chat_id)
-        ]);
+        const chatResponse = await api.getChat(chatId);
+        let ticketResponse: TicketDetails | null = null;
 
-        setTicketDetails(ticketResponse);
+        if (row.chat.active_ticket_id) {
+          try {
+            ticketResponse = await api.getTicket(row.chat.active_ticket_id);
+          } catch (error) {
+            if (!(error instanceof ApiError && error.status === 404)) {
+              throw error;
+            }
+          }
+        }
+
+        setActiveTicketDetails(ticketResponse);
         setChatDetails(chatResponse);
 
         setServerStatus('online');
@@ -712,10 +666,10 @@ export default function SupportWorkspacePage() {
         }
 
         if (error instanceof ApiError && error.status === 404) {
-          setTicketDetails(null);
+          setActiveTicketDetails(null);
           setChatDetails(null);
-          setSelectedTicketId((current) => (current === ticketId ? null : current));
-          setRawRows((prev) => prev.filter((item) => item.ticket.id !== ticketId));
+          setSelectedChatId((current) => (current === chatId ? null : current));
+          setRawRows((prev) => prev.filter((item) => item.chat.id !== chatId));
           return;
         }
 
@@ -868,20 +822,17 @@ export default function SupportWorkspacePage() {
 
     const params = new URLSearchParams(window.location.search);
     const sectionParam = params.get('section');
-    const tabParam = params.get('tab');
     const statusParam = params.get('status');
     const qParam = params.get('q');
 
     if (sectionParam === 'inbox' || sectionParam === 'knowledge' || sectionParam === 'settings' || sectionParam === 'analytics') {
       setSection(sectionParam);
     }
-    if (tabParam === 'new' || tabParam === 'my' || tabParam === 'closed') {
-      setInboxTab(tabParam);
-    }
     if (
       statusParam === 'all' ||
       statusParam === 'pending_ai' ||
       statusParam === 'pending_human' ||
+      statusParam === 'pending_user' ||
       statusParam === 'closed'
     ) {
       setStatusFilter(statusParam);
@@ -898,7 +849,6 @@ export default function SupportWorkspacePage() {
     params.set('section', section);
 
     if (section === 'inbox') {
-      params.set('tab', inboxTab);
       params.set('status', statusFilter);
       if (search.trim()) {
         params.set('q', search.trim());
@@ -907,7 +857,7 @@ export default function SupportWorkspacePage() {
 
     const nextUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', nextUrl);
-  }, [section, inboxTab, statusFilter, search]);
+  }, [section, statusFilter, search]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1044,21 +994,21 @@ export default function SupportWorkspacePage() {
 
   useEffect(() => {
     if (section !== 'inbox') return;
-    if (!selectedTicketId) {
-      setTicketDetails(null);
+    if (!selectedChatId) {
+      setActiveTicketDetails(null);
       setChatDetails(null);
       return;
     }
 
-    const selectedStillExists = rawRows.some((row) => row.ticket.id === selectedTicketId);
+    const selectedStillExists = rawRows.some((row) => row.chat.id === selectedChatId);
     if (!selectedStillExists) {
-      setTicketDetails(null);
+      setActiveTicketDetails(null);
       setChatDetails(null);
       return;
     }
 
-    loadTicketCard(selectedTicketId);
-  }, [selectedTicketId, rawRows, loadTicketCard, section]);
+    loadChatCard(selectedChatId);
+  }, [selectedChatId, rawRows, loadChatCard, section]);
 
   useEffect(() => {
     if (section !== 'inbox') return;
@@ -1082,19 +1032,19 @@ export default function SupportWorkspacePage() {
 
   useEffect(() => {
     if (filteredRows.length === 0) {
-      setSelectedTicketId(null);
+      setSelectedChatId(null);
       return;
     }
 
-    if (!selectedTicketId || !filteredRows.some((item) => item.ticket.id === selectedTicketId)) {
+    if (!selectedChatId || !filteredRows.some((item) => item.chat.id === selectedChatId)) {
       shouldJumpToBottomRef.current = true;
-      setSelectedTicketId(filteredRows[0].ticket.id);
+      setSelectedChatId(filteredRows[0].chat.id);
     }
-  }, [filteredRows, selectedTicketId]);
+  }, [filteredRows, selectedChatId]);
 
   useEffect(() => {
-    if (!selectedTicketId || isLoadingTicketCard || !shouldJumpToBottomRef.current) return;
-    if (!selectedRow || !chatDetails || chatDetails.id !== selectedRow.ticket.chat_id) return;
+    if (!selectedChatId || isLoadingTicketCard || !shouldJumpToBottomRef.current) return;
+    if (!selectedRow || !chatDetails || chatDetails.id !== selectedRow.chat.id) return;
     const el = timelineRef.current;
     if (!el) return;
     const rafId = window.requestAnimationFrame(() => {
@@ -1102,23 +1052,23 @@ export default function SupportWorkspacePage() {
       shouldJumpToBottomRef.current = false;
     });
     return () => window.cancelAnimationFrame(rafId);
-  }, [chatDetails, isLoadingTicketCard, selectedRow, selectedTicketId, timelineItems]);
+  }, [chatDetails, isLoadingTicketCard, selectedRow, selectedChatId, timelineItems]);
 
   useEffect(() => {
-    if (!selectedTicketId || !selectedRow || !chatDetails) return;
-    if (chatDetails.id !== selectedRow.ticket.chat_id) return;
+    if (!selectedChatId || !selectedRow || !chatDetails) return;
+    if (chatDetails.id !== selectedRow.chat.id) return;
 
-    const lastMessage = selectedTicketMessages[selectedTicketMessages.length - 1];
+    const lastMessage = selectedChatMessages[selectedChatMessages.length - 1];
     const nextKey = lastMessage ? `${lastMessage.id}:${lastMessage.entity}` : '';
-    const prevKey = lastSeenMessageKeyByTicketRef.current[selectedTicketId];
+    const prevKey = lastSeenMessageKeyByChatRef.current[selectedChatId];
 
     if (!prevKey) {
-      lastSeenMessageKeyByTicketRef.current[selectedTicketId] = nextKey;
+      lastSeenMessageKeyByChatRef.current[selectedChatId] = nextKey;
       return;
     }
 
     if (!nextKey || prevKey === nextKey) return;
-    lastSeenMessageKeyByTicketRef.current[selectedTicketId] = nextKey;
+    lastSeenMessageKeyByChatRef.current[selectedChatId] = nextKey;
 
     if (lastMessage.entity !== 'operator' && lastMessage.entity !== 'user') return;
     const el = timelineRef.current;
@@ -1132,7 +1082,7 @@ export default function SupportWorkspacePage() {
     });
 
     return () => window.cancelAnimationFrame(rafId);
-  }, [chatDetails, selectedRow, selectedTicketId, selectedTicketMessages]);
+  }, [chatDetails, selectedRow, selectedChatId, selectedChatMessages]);
 
   const onManualRefresh = useCallback(async () => {
     await loadInbox(false);
@@ -1143,38 +1093,32 @@ export default function SupportWorkspacePage() {
       if (!selectedRow) return;
 
       try {
-        await api.changeChatMode(selectedRow.ticket.chat_id, {
+        await api.changeChatMode(selectedRow.chat.id, {
           to_mode_code: nextMode,
           reason
         });
 
         await loadInbox(true);
-        await loadTicketCard(selectedRow.ticket.id, true);
+        await loadChatCard(selectedRow.chat.id, true);
       } catch (error) {
         setInboxError(error instanceof Error ? error.message : 'Не удалось сменить режим чата');
       }
     },
-    [api, loadInbox, loadTicketCard, selectedRow]
-  );
-
-  const onQuickAction = useCallback(
-    async (action: 'handoff_human' | 'return_ai') => {
-      if (!selectedRow) return;
-      const mode = mapModeFromAction(action);
-      const reason = action === 'handoff_human' ? 'handoff_to_human' : 'return_to_ai_helper';
-      await onChangeChatMode(mode, reason);
-    },
-    [onChangeChatMode, selectedRow]
+    [api, loadInbox, loadChatCard, selectedRow]
   );
 
   const onGenerateSuggestions = useCallback(async () => {
     if (!selectedRow) return;
+    if (!selectedActiveTicketId) {
+      setInboxError('В этом чате нет активного тикета для AI-подсказок');
+      return;
+    }
 
     try {
       setIsLoadingSuggestions(true);
       setIsSuggestionsOpen(true);
-      const response = await api.getSuggestions(selectedRow.ticket.chat_id, {
-        ticket_id: selectedRow.ticket.id,
+      const response = await api.getSuggestions(selectedRow.chat.id, {
+        ticket_id: selectedActiveTicketId,
         draft_context: composerText.trim() || undefined,
         max_suggestions: 5
       });
@@ -1186,7 +1130,7 @@ export default function SupportWorkspacePage() {
     } finally {
       setIsLoadingSuggestions(false);
     }
-  }, [api, composerText, selectedRow]);
+  }, [api, composerText, selectedActiveTicketId, selectedRow]);
 
   const onUseSuggestion = useCallback((text: string) => {
     setComposerText((prev) => {
@@ -1202,18 +1146,22 @@ export default function SupportWorkspacePage() {
   const sendMessageText = useCallback(
     async (text: string) => {
       if (!selectedRow || !text.trim()) return;
+      if (!selectedActiveTicketId) {
+        setInboxError('В этом чате нет активного тикета для ответа');
+        return;
+      }
 
       try {
         setIsSendingMessage(true);
 
-        await api.sendMessage(selectedRow.ticket.chat_id, {
-          ticket_id: selectedRow.ticket.id,
+        await api.sendMessage(selectedRow.chat.id, {
+          ticket_id: selectedActiveTicketId,
           text: text.trim()
         });
 
         setComposerText('');
 
-        await loadTicketCard(selectedRow.ticket.id, true);
+        await loadChatCard(selectedRow.chat.id, true);
         await loadInbox(true);
       } catch (error) {
         setInboxError(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
@@ -1221,7 +1169,7 @@ export default function SupportWorkspacePage() {
         setIsSendingMessage(false);
       }
     },
-    [api, loadInbox, loadTicketCard, selectedRow]
+    [api, loadInbox, loadChatCard, selectedActiveTicketId, selectedRow]
   );
 
   const onSendMessage = useCallback(async () => {
@@ -1309,30 +1257,7 @@ export default function SupportWorkspacePage() {
           !isChatModalViewport ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-1'
         }`}
       >
-        <div className="relative min-w-0 rounded-xl bg-[var(--bg-soft)] p-1">
-          <span
-            className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-lg bg-[var(--accent)] shadow-[0_8px_20px_rgba(47,125,244,0.3)] transition-transform duration-300 ease-out"
-            style={{
-              width: `calc((100% - 8px) / ${INBOX_TABS.length})`,
-              transform: `translateX(${activeInboxTabIndex * 100}%)`
-            }}
-          />
-          <div className="relative z-10 grid min-w-0 grid-cols-3">
-            {INBOX_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                className={`min-w-0 truncate rounded-lg px-2 py-1.5 text-xs font-medium transition-colors duration-200 ${
-                  inboxTab === tab.key ? 'text-white' : 'text-[var(--muted)] hover:text-[var(--text)]'
-                }`}
-                onClick={() => {
-                  setInboxTab(tab.key);
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="text-sm font-semibold">Чаты</div>
         {!isChatModalViewport ? (
           <button
             className="btn btn-primary inline-flex h-7 w-7 items-center justify-center self-center text-white"
@@ -1358,85 +1283,86 @@ export default function SupportWorkspacePage() {
         <label className="relative">
           <input
             className="field pl-8"
-            placeholder="Поиск по диалогам"
+             placeholder="Search conversations"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </label>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
-          <select
+           <select
             className="field"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
           >
-            <option value="all">Все статусы</option>
+            <option value="all">Все чаты</option>
             <option value="pending_ai">Ожидают AI</option>
             <option value="pending_human">Ожидают человека</option>
-            <option value="closed">Закрытые</option>
+            <option value="pending_user">Ожидают клиента</option>
+            <option value="closed">Без активного тикета</option>
           </select>
 
-          <button className="btn justify-center" onClick={onManualRefresh} aria-label="Обновить">
+          <button className="btn justify-center" onClick={onManualRefresh} aria-label="Refresh">
             <RefreshCcw size={14} />
           </button>
         </div>
       </div>
 
-      <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
-        <div>
-          Диалоги: {filteredRows.length} из {ticketTotal}
-        </div>
-        {isLoadingInbox ? (
-          <div className="inline-flex items-center gap-1">
-            <Loader2 size={13} className="animate-spin" />
-            Обновляем...
-          </div>
-        ) : null}
+       <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
+        <div>Чаты: {filteredRows.length} из {chatTotal}</div>
+         {isLoadingInbox ? (
+           <div className="inline-flex items-center gap-1">
+             <Loader2 size={13} className="animate-spin" />
+             Loading...
+           </div>
+         ) : null}
       </div>
 
       <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-1">
         {filteredRows.map((row) => {
-          const isActive = selectedTicketId === row.ticket.id;
-          const isClosed = row.ticket.status_code === 'closed';
-          const aiAutoReply = row.chat?.mode_code === 'full_ai' && !isClosed;
+          const isActive = selectedChatId === row.chat.id;
+          const statusCode = getRowStatusCode(row);
+          const isClosed = statusCode === 'closed';
+          const aiAutoReply = row.chat.mode_code === 'full_ai' && !isClosed;
 
           return (
             <button
-              key={row.ticket.id}
+              key={row.chat.id}
               className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
                 isActive
                   ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
                   : 'border-[var(--line)] bg-[var(--panel-solid)] hover:bg-[var(--bg-soft)]'
-              } ${row.ticket.status_code === 'pending_ai' ? 'status-pulse' : ''}`}
+              } ${statusCode === 'pending_ai' ? 'status-pulse' : ''}`}
               onClick={() => {
                 shouldJumpToBottomRef.current = true;
-                setSelectedTicketId(row.ticket.id);
+                setSelectedChatId(row.chat.id);
                 if (isChatModalViewport) {
                   setIsChatListOpen(false);
                 }
               }}
             >
               <div className="mb-2 flex items-start justify-between gap-2">
-                <div className="truncate text-sm font-semibold">{deriveUserDisplay(row.chat)}</div>
-                <span className="badge badge-muted">{toChatTimeLabel(row.lastMessageAt)}</span>
-
-                {aiAutoReply ? <span className="ai-dot" title="AI отвечает автоматически" /> : null}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold">{deriveUserDisplay(row.chat)}</div>
+                  {getPlatformIcon(row.chat)}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="badge badge-muted">{formatTicketStatus(statusCode)}</span>
+                  <span className="badge badge-muted">{toChatTimeLabel(row.lastMessageAt)}</span>
+                  {aiAutoReply ? <span className="ai-dot" title="AI отвечает автоматически" /> : null}
+                </div>
               </div>
 
               <div className="line-clamp-2 text-sm text-[var(--muted)]">{row.snippet}</div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-1">
-               
-              </div>
             </button>
           );
         })}
 
-        {filteredRows.length === 0 ? (
-          <div className="rounded-xl bg-[var(--bg-soft)] p-4 text-sm text-[var(--muted)]">
-            Ничего не найдено.
-          </div>
-        ) : null}
+         {filteredRows.length === 0 ? (
+           <div className="rounded-xl bg-[var(--bg-soft)] p-4 text-sm text-[var(--muted)]">
+             Чаты не найдены.
+           </div>
+         ) : null}
       </div>
     </>
   );
@@ -1470,7 +1396,7 @@ export default function SupportWorkspacePage() {
               <button
                 className="btn btn-primary px-2.5 py-1.5 text-xs"
                 onClick={() => onSendSuggestionNow(suggestion.text)}
-                disabled={isSendingMessage}
+                disabled={isSendingMessage || isSelectedChatReadOnly}
               >
                 Отправить сразу
               </button>
@@ -1601,19 +1527,20 @@ export default function SupportWorkspacePage() {
 
                   <div className="scrollbar-thin mt-2 flex flex-1 flex-col items-center gap-2 overflow-y-auto pb-1 pt-1">
                     {filteredRows.map((row) => {
-                      const isActive = selectedTicketId === row.ticket.id;
-                      const avatar = (row.chat?.user_id?.[0] ?? '?').toUpperCase();
+                      const isActive = selectedChatId === row.chat.id;
+                      const avatar = (row.chat.user_id?.[0] ?? '?').toUpperCase();
+                      const statusCode = getRowStatusCode(row);
                       const statusClass =
-                        row.ticket.status_code === 'closed'
+                        statusCode === 'closed'
                           ? 'border-[var(--danger)]'
-                          : row.ticket.status_code === 'pending_human'
+                          : statusCode === 'pending_human'
                             ? 'border-[var(--success)]'
                             : 'border-[var(--accent)]';
-                      const hasUnread = row.ticket.status_code !== 'closed';
+                      const hasUnread = statusCode !== 'closed';
 
                       return (
                         <button
-                          key={`mini-${row.ticket.id}`}
+                          key={`mini-${row.chat.id}`}
                           className={`relative flex h-9 w-9 items-center justify-center rounded-full border text-[11px] font-semibold ${
                             isActive
                               ? 'bg-[var(--accent-soft)] text-[var(--text)]'
@@ -1622,7 +1549,7 @@ export default function SupportWorkspacePage() {
                           title={`${deriveUserDisplay(row.chat)} • ${row.snippet}`}
                           onClick={() => {
                             shouldJumpToBottomRef.current = true;
-                            setSelectedTicketId(row.ticket.id);
+                            setSelectedChatId(row.chat.id);
                           }}
                           aria-label={`Открыть чат ${deriveUserDisplay(row.chat)}`}
                         >
@@ -1658,10 +1585,13 @@ export default function SupportWorkspacePage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <div className="truncate text-sm font-semibold">
-                            {ticketDetails?.title ?? selectedRow.ticket.title ?? 'Без названия'}
+                            {activeTicketDetails?.title ?? selectedRow.activeTicket?.title ?? 'История чата'}
                           </div>
                           <span className="badge badge-muted">
                             {translateMode((chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist')}
+                          </span>
+                          <span className="badge badge-muted">
+                            {formatTicketStatus(getRowStatusCode(selectedRow))}
                           </span>
                         </div>
                         <div className="mt-0.5 truncate text-xs text-[var(--muted)]">
@@ -1681,6 +1611,7 @@ export default function SupportWorkspacePage() {
                           onChange={(event) => onChangeChatMode(event.target.value as ChatModeCode, 'mode_selected')}
                         >
                           <option value="full_ai">AI ведёт диалог</option>
+                          <option value="ai_assist">AI помогает</option>
                           <option value="no_ai">Без AI</option>
                         </select>
 
@@ -1745,11 +1676,16 @@ export default function SupportWorkspacePage() {
 
                     <div className="sticky bottom-0 z-10 border-t border-[var(--line)] bg-[var(--panel-solid)] p-3">
                       <div className="mx-auto max-w-[860px]">
+                        {isSelectedChatReadOnly ? (
+                          <div className="mb-2 rounded-xl bg-[var(--bg-soft)] px-3 py-2 text-xs text-[var(--muted)]">
+                            В этом чате сейчас нет активного тикета. История доступна для просмотра, но отправка ответа и AI-подсказки отключены.
+                          </div>
+                        ) : null}
                         <div className="flex items-end gap-2">
                           <button
                             className="btn flex gap-1 px-2.5 py-2 text-xs"
                             onClick={onGenerateSuggestions}
-                            disabled={isLoadingSuggestions}
+                            disabled={isLoadingSuggestions || isSelectedChatReadOnly}
                           >
                             <Brain size={14} />
                             {isLoadingSuggestions ? 'Генерируем...' : 'AI'}
@@ -1757,16 +1693,17 @@ export default function SupportWorkspacePage() {
 
                           <textarea
                             className="min-h-[98px] w-full flex-1 resize-y rounded-xl border border-[var(--line)] bg-transparent px-3 py-2 text-sm text-[var(--text)] outline-none transition focus:border-[var(--accent)] focus:shadow-[0_0_0_2px_rgba(47,125,244,0.2)]"
-                            placeholder="Введите сообщение клиенту"
+                            placeholder={isSelectedChatReadOnly ? 'Нет активного тикета для ответа' : 'Введите сообщение клиенту'}
                             value={composerText}
                             onChange={(event) => setComposerText(event.target.value)}
                             onKeyDown={onComposerKeyDown}
+                            disabled={isSelectedChatReadOnly}
                           />
 
                           <button
                             className="btn btn-primary inline-flex items-center gap-1 px-3 py-2 text-xs"
                             onClick={onSendMessage}
-                            disabled={isSendingMessage || !composerText.trim()}
+                            disabled={isSelectedChatReadOnly || isSendingMessage || !composerText.trim()}
                           >
                             {isSendingMessage ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                             Отправить
@@ -1917,7 +1854,7 @@ export default function SupportWorkspacePage() {
                 </tr>
               </thead>
               <tbody>
-                {kbDocs.map((doc) => (
+                {kbDocs?.map((doc) => (
                   <tr key={doc.id} className="border-t border-[var(--line)]">
                     <td className="px-3 py-2">{doc.source_name}</td>
                     <td className="px-3 py-2">{parseFileExt(doc.source_name)}</td>
@@ -1938,7 +1875,7 @@ export default function SupportWorkspacePage() {
                   </tr>
                 ))}
 
-                {kbDocs.length === 0 ? (
+                {(!kbDocs || kbDocs.length === 0) ? (
                   <tr>
                     <td className="px-3 py-6 text-sm text-[var(--muted)]" colSpan={7}>
                       Список документов пуст.

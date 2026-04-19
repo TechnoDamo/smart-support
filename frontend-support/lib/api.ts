@@ -82,7 +82,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const supportApi: SupportApi = {
   async ping() {
-    await requestJson<TicketListResponse>('/tickets?page=1&page_size=1');
+    await requestJson<ChatListResponse>('/chats?page=1&page_size=1');
   },
 
   async listTickets(params) {

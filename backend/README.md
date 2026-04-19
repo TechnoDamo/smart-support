@@ -29,7 +29,7 @@ brew install uv
 
 ```bash
 cd backend
-cp .env.example .env
+cp ../.env.example ../.env
 make sync
 make run
 ```
@@ -54,10 +54,10 @@ DATABASE_URL=postgresql+asyncpg://smart:smart@localhost:5432/smart
 
 ```bash
 cd backend
-docker compose up --build
+docker compose --env-file ../.env up --build
 ```
 
-В этом режиме `backend/docker-compose.yml` поднимает только сервис `api`, а адреса БД/Qdrant задаются через переменные окружения.
+В этом режиме `backend/docker-compose.yml` поднимает только сервис `api`, а все переменные берутся из корневого `../.env`.
 
 ### Весь стек системы
 
@@ -75,13 +75,14 @@ make up AI=mock
 
 ## Конфигурация
 
-Все ключевые параметры лежат в `backend/.env.example`.
+Единый env-файл проекта лежит в корне репозитория: `.env`.
+Шаблон параметров лежит в [`.env.example`](/Users/damir/Desktop/smart-support/.env.example).
 
 | Группа | Параметры | Описание |
 |---|---|---|
 | БД | `DATABASE_URL` | PostgreSQL или SQLite |
-| LLM | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | Любой OpenAI-совместимый endpoint |
-| Embeddings | `EMBEDDING_*` | Параметры embedding-провайдера |
+| LLM | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `OPENAI_API_KEY` | Любой OpenAI-совместимый endpoint |
+| Embeddings | `EMBEDDING_*`, `OPENAI_API_KEY` | Параметры embedding-провайдера |
 | Vector store | `VECTOR_STORE_PROVIDER`, `QDRANT_URL` | `qdrant` или `mock` |
 | Object storage | `OBJECT_STORAGE_PROVIDER`, `OBJECT_STORAGE_LOCAL_PATH`, `S3_*` | Локальный диск или S3 |
 | Telegram | `CHANNEL_TELEGRAM_PROVIDER`, `TELEGRAM_BOT_TOKEN` | Реальный канал или mock |

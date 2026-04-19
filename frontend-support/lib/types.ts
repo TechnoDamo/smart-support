@@ -214,6 +214,59 @@ export class ApiError extends Error {
 
 export type ServerStatus = 'unknown' | 'online' | 'offline';
 
+// Graylog Log Entry Types
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+
+export type GraylogLogEntry = {
+  timestamp: string;
+  level: LogLevel;
+  logger: string;
+  message: string;
+  service: string;
+  environment: string;
+  request_id?: string;
+  user_id?: string;
+  endpoint?: string;
+  method?: string;
+  status_code?: number;
+  duration_ms?: number;
+  db_operation?: string;
+  db_table?: string;
+  db_duration_ms?: number;
+  error_type?: string;
+  stack_trace?: string;
+  [key: string]: any;
+};
+
+export type GraylogLogResponse = {
+  logs: GraylogLogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+export type GraylogStats = {
+  total_logs: number;
+  logs_by_level: Record<LogLevel, number>;
+  logs_by_service: Record<string, number>;
+  logs_by_endpoint: Record<string, number>;
+  error_rate: number;
+  avg_response_time_ms: number;
+  top_endpoints: Array<{ endpoint: string; count: number; avg_duration_ms: number }>;
+  recent_errors: GraylogLogEntry[];
+};
+
+export type GraylogSettings = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  protocol: 'tcp' | 'udp';
+  web_ui_url: string;
+  username: string;
+  password: string;
+};
+
 export type SupportApi = {
   listTickets: (params?: {
     page?: number;
@@ -254,4 +307,22 @@ export type SupportApi = {
   }) => Promise<RagUploadResponse>;
   deleteRagDocument: (documentId: string) => Promise<{ document_id: string; deleted_at: string }>;
   ping: () => Promise<void>;
+  // Graylog API methods
+  getGraylogLogs: (params?: {
+    page?: number;
+    page_size?: number;
+    level?: LogLevel;
+    service?: string;
+    endpoint?: string;
+    search?: string;
+    from?: string;
+    to?: string;
+  }) => Promise<GraylogLogResponse>;
+  getGraylogStats: (params?: {
+    from?: string;
+    to?: string;
+  }) => Promise<GraylogStats>;
+  getGraylogSettings: () => Promise<GraylogSettings>;
+  updateGraylogSettings: (settings: Partial<GraylogSettings>) => Promise<GraylogSettings>;
+  testGraylogConnection: () => Promise<{ connected: boolean; message: string }>;
 };
