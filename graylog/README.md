@@ -1,107 +1,113 @@
-# Graylog Logging Stack
+# Graylog: централизованное логирование
 
-Centralized logging for Smart Support using Graylog.
+Этот модуль поднимает Graylog 5.2 + Elasticsearch 7.17 + MongoDB 6 и автоматически создаёт GELF TCP input, в который backend Smart Support шлёт структурированные JSON-логи.
 
-## Quick Start
+## Быстрый старт
 
-1. **Start Graylog**:
+1. **Поднять стек вместе с Graylog:**
+
    ```bash
-   cd /Users/damir/Desktop/smart-support/graylog
-   docker-compose up -d
+   cd /Users/damir/Desktop/smart-support
+   make up AI=cloud STORAGE=minio GRAYLOG=true
    ```
 
-2. **Access Graylog Web UI**:
-   - URL: http://localhost:19000
-   - Username: `admin`
-   - Password: `admin`
+   `make` автоматически:
+   - добавляет профиль `graylog` в docker-compose;
+   - прокидывает в backend переменные `GRAYLOG_ENABLED=true`, `GRAYLOG_HOST=graylog`, `GRAYLOG_PORT=12201`, `GRAYLOG_PROTOCOL=tcp`;
+   - запускает одноразовый контейнер `smart-support-graylog-init`, который создаёт GELF input через REST API (`POST /api/system/inputs`).
 
-3. **Configure Input**:
-   - Go to System → Inputs
-   - Select "GELF TCP" or "GELF UDP"
-   - Title: "Smart Support Backend"
-   - Port: 12201 (already exposed)
-   - Save
+2. **Открыть веб-интерфейс:**
 
-## Logging Configuration
+   - URL: <http://localhost:19000>
+   - Логин: `admin`
+   - Пароль: `admin` (меняется через `GRAYLOG_ADMIN_PASSWORD` в `.env`)
 
-The backend sends structured JSON logs in GELF format to Graylog.
+3. **Проверить, что input создан:**
 
-### Environment Variables
+   - `System → Inputs`
+   - В списке должен быть `Smart Support Backend GELF TCP` на порту `12201`.
+   - Если его нет — проверьте логи `docker logs smart-support-graylog-init`.
 
-Add to your `.env` file:
+## Конфигурация логирования
+
+Backend использует `python-json-logger` и собственный GELF-хендлер. Параметры — в общем `.env` в корне репозитория:
+
 ```bash
 # Graylog Configuration
-GRAYLOG_ENABLED=true
-GRAYLOG_HOST=localhost
+GRAYLOG_ENABLED=false
+GRAYLOG_HOST=graylog          # внутри docker-стека; для локального backend — localhost
 GRAYLOG_PORT=12201
-GRAYLOG_PROTOCOL=tcp  # tcp or udp
+GRAYLOG_PROTOCOL=tcp          # tcp или udp
+GRAYLOG_ADMIN_PASSWORD=admin  # читается init-контейнером
+
 LOG_LEVEL=INFO
-LOG_FORMAT=json  # json or text
+LOG_FORMAT=json               # json включает GELF-поля, text — удобно в консоли
 ```
 
-### Log Fields
+Важные нюансы:
 
-Each log entry includes:
-- `timestamp`: ISO 8601 timestamp
-- `level`: DEBUG, INFO, WARNING, ERROR, CRITICAL
-- `logger`: Module name
-- `message`: Log message
-- `service`: "smart-support-backend"
-- `environment`: dev/prod/test
-- `request_id`: Unique ID for HTTP requests
-- `user_id`: Authenticated user ID (if available)
-- `endpoint`: HTTP endpoint
-- `method`: HTTP method
-- `status_code`: HTTP status code
-- `duration_ms`: Request duration
-- `db_operation`: SQL operation type
-- `db_table`: Database table name
-- `db_duration_ms`: Query duration
-- `error_type`: Exception type (for errors)
-- `stack_trace`: Full stack trace (for errors)
+- `GRAYLOG_ENABLED` выставляется автоматически при `make up ... GRAYLOG=true` — вручную включать не нужно.
+- `GRAYLOG_HOST=graylog` работает только в docker-стеке (по имени сервиса). Если backend стартует локально вне Docker — замените на `localhost`.
+- `GRAYLOG_ADMIN_PASSWORD` читается init-сервисом и должен совпадать с хешем `GRAYLOG_ROOT_PASSWORD_SHA2` в `graylog/docker-compose.yml`. Для дефолтного `admin` хеш уже зашит.
 
-## Security Notes
+## Какие поля попадают в лог
 
-1. **Sensitive Data Masking**:
-   - Passwords, tokens, API keys are automatically masked
-   - Request/response bodies are sanitized
-   - Personal data is redacted
+Каждая запись включает:
 
-2. **Production**:
-   - Change default passwords in `.env`
-   - Use TLS for Graylog communication
-   - Configure firewall rules
-   - Set up retention policies
+- `timestamp` — ISO 8601;
+- `level` — `DEBUG | INFO | WARNING | ERROR | CRITICAL`;
+- `logger` — имя модуля;
+- `message` — текст сообщения;
+- `service` — `smart-support-backend`;
+- `environment` — `dev | prod | test`;
+- `request_id` — ID HTTP-запроса (из middleware);
+- `user_id` — ID авторизованного пользователя, если есть;
+- `endpoint`, `method`, `status_code`, `duration_ms` — для HTTP-запросов;
+- `db_operation`, `db_table`, `db_duration_ms` — для SQL-запросов;
+- `error_type`, `stack_trace` — для исключений.
 
-## Integration with Backend
+Дополнительные kwargs, переданные через `logger.info("msg", extra={...})`, тоже попадают в GELF в виде отдельных полей.
 
-The backend uses:
-- `python-json-logger` for structured JSON logging
-- Custom GELF handler for Graylog
-- FastAPI middleware for HTTP logging
-- SQLAlchemy events for DB logging
+## Безопасность
 
-## Monitoring
+1. **Маскирование чувствительных данных.** Пароли, токены, API-ключи маскируются в middleware до отправки в лог. Тела запросов/ответов очищаются от персональных данных.
+2. **Прод.** Обязательно:
+   - смените `GRAYLOG_ADMIN_PASSWORD` и перегенерируйте `GRAYLOG_ROOT_PASSWORD_SHA2`;
+   - закройте порт 19000 файрволом / проксируйте через ingress c TLS;
+   - настройте retention policies для Elasticsearch (`System → Indices`).
 
-Check logs in Graylog:
-1. Search: `service:"smart-support-backend"`
-2. Create dashboards for:
-   - HTTP request rates
-   - Error rates by endpoint
-   - Slow database queries
-   - Application performance
+## Устранение неполадок
 
-## Troubleshooting
+**Graylog не стартует**
+- `docker compose -f docker-compose.yml --profile graylog logs graylog`
+- Проверьте, что порты `19000`, `12201`, `5555`, `1514` свободны.
+- Elasticsearch требует минимум 512 МБ heap; при нехватке памяти контейнер падает с OOM.
 
-1. **Graylog not starting**:
-   - Check Docker logs: `docker-compose logs graylog`
-   - Ensure ports 9000, 12201 are free
+**Логи не появляются**
+- Убедитесь, что `smart-support-graylog-init` завершился с кодом 0:
+  ```bash
+  docker logs smart-support-graylog-init
+  ```
+- Проверьте, что в Graylog UI есть input `Smart Support Backend GELF TCP`.
+- Проверьте backend-логи на ошибки подключения к Graylog.
+- Внутри Docker-стека backend должен писать по хосту `graylog`, не `localhost`.
 
-2. **Logs not appearing**:
-   - Verify input is running in Graylog UI
-   - Check backend logs for connection errors
-   - Test with: `echo '{"version":"1.1","host":"test","short_message":"Test"}' | nc -w1 localhost 12201`
+**Много дисковой записи / распухает `elasticsearch_data/`**
+- Настройте retention: `System → Indices → Default index set → Rotation / Retention`.
+- Уменьшите `ES_JAVA_OPTS` и размер шардов под dev-нагрузку.
 
-3. **High memory usage**:
-   - Adjust Elasticsearch heap size in docker-compose.yml
-   - Configure log retention policies
+## Интеграция с backend
+
+- `python-json-logger` → структурированный JSON.
+- Собственный GELF-хендлер шлёт по TCP/UDP с автоматическим chunking больших сообщений.
+- FastAPI middleware добавляет `request_id`, тайминги, `user_id`.
+- SQLAlchemy events логируют медленные запросы (`db_operation`, `db_duration_ms`).
+
+## Готовые запросы и дашборды
+
+В Graylog UI полезно сохранить:
+
+- `service:"smart-support-backend" AND level:ERROR` — все ошибки backend.
+- `service:"smart-support-backend" AND duration_ms:>1000` — медленные HTTP-запросы.
+- `logger:"app.services.ai_orchestrator"` — цепочка работы AI-оркестратора.
+- `db_duration_ms:>500` — медленные SQL-запросы.
