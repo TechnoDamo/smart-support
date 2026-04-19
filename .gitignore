@@ -19,6 +19,16 @@ backend/storage/
 # Node modules
 node_modules/
 
+# Next.js / TS build caches
+frontend-support/tsconfig.tsbuildinfo
+.next/
+
+# Graylog runtime state (Elasticsearch + Mongo indices, journals, etc.)
+graylog/elasticsearch_data/
+graylog/mongodb_data/
+graylog/graylog_data/
+graylog/graylog_journal/
+
 # Python
 __pycache__/
 *.pyc
