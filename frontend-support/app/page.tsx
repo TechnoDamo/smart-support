@@ -338,6 +338,8 @@ export default function SupportWorkspacePage() {
 
   const [isLoadingInbox, setIsLoadingInbox] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
+  const [inboxErrorCountdown, setInboxErrorCountdown] = useState(0);
+  const [inboxErrorNonce, setInboxErrorNonce] = useState(0);
 
   const [rawRows, setRawRows] = useState<ChatRow[]>([]);
   const [chatTotal, setChatTotal] = useState(0);
@@ -389,6 +391,11 @@ export default function SupportWorkspacePage() {
   const lastSeenMessageKeyByChatRef = useRef<Record<string, string>>({});
 
   const api = supportApi;
+
+  const showInboxError = useCallback((message: string) => {
+    setInboxError(message);
+    setInboxErrorNonce((prev) => prev + 1);
+  }, []);
 
   const selectedRow = useMemo(() => {
     if (!selectedChatId) return null;
@@ -612,9 +619,9 @@ export default function SupportWorkspacePage() {
         setServerStatus('online');
       } catch (error) {
         if (error instanceof ApiError) {
-          setInboxError(error.message);
+          showInboxError(error.message);
         } else {
-          setInboxError('Не удалось загрузить список чатов');
+          showInboxError('Не удалось загрузить список чатов');
         }
 
         if (isBackendConnectivityError(error)) {
@@ -626,7 +633,7 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, selectedChatId, chatDetailsCache]
+    [api, selectedChatId, chatDetailsCache, showInboxError]
   );
 
   const loadChatCard = useCallback(
@@ -662,7 +669,7 @@ export default function SupportWorkspacePage() {
         setServerStatus('online');
       } catch (error) {
         if (!silent) {
-          setInboxError(error instanceof Error ? error.message : 'Не удалось открыть диалог');
+          showInboxError(error instanceof Error ? error.message : 'Не удалось открыть диалог');
         }
 
         if (error instanceof ApiError && error.status === 404) {
@@ -682,7 +689,7 @@ export default function SupportWorkspacePage() {
         }
       }
     },
-    [api, rawRows]
+    [api, rawRows, showInboxError]
   );
 
   const loadKnowledgeBase = useCallback(
@@ -905,6 +912,29 @@ export default function SupportWorkspacePage() {
   }, [themeMode, autoCloseMinutes, autoSummaryAfterClose, pushSummaryToRag]);
 
   useEffect(() => {
+    if (!inboxError) {
+      setInboxErrorCountdown(0);
+      return;
+    }
+
+    setInboxErrorCountdown(3);
+
+    const intervalId = window.setInterval(() => {
+      setInboxErrorCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    const timeoutId = window.setTimeout(() => {
+      setInboxError(null);
+      setInboxErrorCountdown(0);
+    }, 3000);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [inboxError, inboxErrorNonce]);
+
+  useEffect(() => {
     const root = document.documentElement;
 
     const apply = (isDark: boolean) => {
@@ -1088,9 +1118,33 @@ export default function SupportWorkspacePage() {
     await loadInbox(false);
   }, [loadInbox]);
 
+  const ensureRagDocumentsAvailable = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await api.listRagDocuments({
+        page: 1,
+        page_size: 1,
+        include_deleted: false
+      });
+
+      if (response.total > 0) {
+        return true;
+      }
+
+      showInboxError('Нет загруженных документов');
+      return false;
+    } catch (error) {
+      showInboxError(error instanceof Error ? error.message : 'Не удалось проверить документы');
+      return false;
+    }
+  }, [api, showInboxError]);
+
   const onChangeChatMode = useCallback(
     async (nextMode: ChatModeCode, reason: string) => {
       if (!selectedRow) return;
+      if (nextMode === 'full_ai') {
+        const hasDocuments = await ensureRagDocumentsAvailable();
+        if (!hasDocuments) return;
+      }
 
       try {
         await api.changeChatMode(selectedRow.chat.id, {
@@ -1101,16 +1155,20 @@ export default function SupportWorkspacePage() {
         await loadInbox(true);
         await loadChatCard(selectedRow.chat.id, true);
       } catch (error) {
-        setInboxError(error instanceof Error ? error.message : 'Не удалось сменить режим чата');
+        showInboxError(error instanceof Error ? error.message : 'Не удалось сменить режим чата');
       }
     },
-    [api, loadInbox, loadChatCard, selectedRow]
+    [api, ensureRagDocumentsAvailable, loadInbox, loadChatCard, selectedRow, showInboxError]
   );
 
   const onGenerateSuggestions = useCallback(async () => {
     if (!selectedRow) return;
     if (!selectedActiveTicketId) {
-      setInboxError('В этом чате нет активного тикета для AI-подсказок');
+      showInboxError('В этом чате нет активного тикета для AI-подсказок');
+      return;
+    }
+    const hasDocuments = await ensureRagDocumentsAvailable();
+    if (!hasDocuments) {
       return;
     }
 
@@ -1126,11 +1184,11 @@ export default function SupportWorkspacePage() {
       setSuggestions(response.suggestions);
       setExpandedSourcesSuggestionId(null);
     } catch (error) {
-      setInboxError(error instanceof Error ? error.message : 'Не удалось получить AI-подсказки');
+      showInboxError(error instanceof Error ? error.message : 'Не удалось получить AI-подсказки');
     } finally {
       setIsLoadingSuggestions(false);
     }
-  }, [api, composerText, selectedActiveTicketId, selectedRow]);
+  }, [api, composerText, ensureRagDocumentsAvailable, selectedActiveTicketId, selectedRow, showInboxError]);
 
   const onUseSuggestion = useCallback((text: string) => {
     setComposerText((prev) => {
@@ -1147,7 +1205,7 @@ export default function SupportWorkspacePage() {
     async (text: string) => {
       if (!selectedRow || !text.trim()) return;
       if (!selectedActiveTicketId) {
-        setInboxError('В этом чате нет активного тикета для ответа');
+        showInboxError('В этом чате нет активного тикета для ответа');
         return;
       }
 
@@ -1164,12 +1222,12 @@ export default function SupportWorkspacePage() {
         await loadChatCard(selectedRow.chat.id, true);
         await loadInbox(true);
       } catch (error) {
-        setInboxError(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
+        showInboxError(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
       } finally {
         setIsSendingMessage(false);
       }
     },
-    [api, loadInbox, loadChatCard, selectedActiveTicketId, selectedRow]
+    [api, loadInbox, loadChatCard, selectedActiveTicketId, selectedRow, showInboxError]
   );
 
   const onSendMessage = useCallback(async () => {
@@ -1477,6 +1535,7 @@ export default function SupportWorkspacePage() {
       {inboxError ? (
         <div className="mb-3 rounded-xl bg-[rgba(209,70,70,0.13)] px-3 py-2 text-sm text-[var(--danger)]">
           {inboxError}
+          {inboxErrorCountdown > 0 ? ` (скроется через ${inboxErrorCountdown}с)` : ''}
         </div>
       ) : null}
 
