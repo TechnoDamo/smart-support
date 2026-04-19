@@ -95,7 +95,8 @@ const NAV_SECTIONS: ReadonlyArray<{ key: NavSection; label: string }> = [
 
 const KB_PAGE_SIZE = 20;
 const INBOX_FETCH_SIZE = 200;
-const POLL_MS = 30000; // 30 seconds instead of 4 seconds
+const POLL_MS = 5000;
+const CHAT_DETAILS_CACHE_TTL_MS = 4000;
 const LOCAL_SETTINGS_KEY = 'smart-support-local-settings-v1';
 const CHART_COLORS = ['#2f7df4', '#0f9f65', '#d78a00', '#d14646', '#7a8698'];
 
@@ -402,7 +403,13 @@ export default function SupportWorkspacePage() {
     return rawRows.find((row) => row.chat.id === selectedChatId) ?? null;
   }, [rawRows, selectedChatId]);
 
-  const selectedActiveTicketId = selectedRow?.chat.active_ticket_id ?? null;
+  const selectedActiveTicketId =
+    (chatDetails && selectedRow && chatDetails.id === selectedRow.chat.id
+      ? chatDetails.active_ticket_id
+      : null) ??
+    activeTicketDetails?.id ??
+    selectedRow?.activeTicket?.id ??
+    null;
   const isSelectedChatReadOnly = !selectedActiveTicketId;
 
   const activeSectionIndex = useMemo(
@@ -524,7 +531,7 @@ export default function SupportWorkspacePage() {
 
         for (const chatId of uniqueChatIds) {
           const cached = chatDetailsCache[chatId];
-          if (cached && (now - cached.timestamp < 60000)) {
+          if (cached && now - cached.timestamp < CHAT_DETAILS_CACHE_TTL_MS) {
             chatDetailsMap[chatId] = cached.details;
           } else {
             chatIdsToFetch.push(chatId);
@@ -583,15 +590,22 @@ export default function SupportWorkspacePage() {
           }
 
           const chatDetail = chatDetailsMap[chat.id];
+          const effectiveActiveTicketId =
+            (chatDetail ? chatDetail.active_ticket_id : undefined) ?? chat.active_ticket_id ?? null;
           const lastMessage = (chatDetail?.messages ?? []).at(-1);
           const activeTicket =
-            chat.active_ticket_id ? activeTicketMap[chat.active_ticket_id] ?? null : null;
+            effectiveActiveTicketId ? activeTicketMap[effectiveActiveTicketId] ?? null : null;
           const lastMessageAt =
             lastMessage?.time ?? chatDetail?.updated_at ?? activeTicket?.time_started ?? chat.updated_at;
 
           return [
             {
-              chat,
+              chat: {
+                ...chat,
+                active_ticket_id: effectiveActiveTicketId,
+                mode_code: chatDetail?.mode_code ?? chat.mode_code,
+                updated_at: chatDetail?.updated_at ?? chat.updated_at
+              },
               activeTicket,
               lastMessage,
               lastMessageAt,
@@ -618,6 +632,12 @@ export default function SupportWorkspacePage() {
 
         setServerStatus('online');
       } catch (error) {
+        setRawRows([]);
+        setChatTotal(0);
+        setActiveTicketDetails(null);
+        setChatDetails(null);
+        setSelectedChatId(null);
+
         if (error instanceof ApiError) {
           showInboxError(error.message);
         } else {
@@ -653,9 +673,9 @@ export default function SupportWorkspacePage() {
         const chatResponse = await api.getChat(chatId);
         let ticketResponse: TicketDetails | null = null;
 
-        if (row.chat.active_ticket_id) {
+        if (chatResponse.active_ticket_id) {
           try {
-            ticketResponse = await api.getTicket(row.chat.active_ticket_id);
+            ticketResponse = await api.getTicket(chatResponse.active_ticket_id);
           } catch (error) {
             if (!(error instanceof ApiError && error.status === 404)) {
               throw error;

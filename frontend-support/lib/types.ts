@@ -308,7 +308,7 @@ export type SupportApi = {
   deleteRagDocument: (documentId: string) => Promise<{ document_id: string; deleted_at: string }>;
   ping: () => Promise<void>;
   // Graylog API methods
-  getGraylogLogs: (params?: {
+  getGraylogLogs?: (params?: {
     page?: number;
     page_size?: number;
     level?: LogLevel;
@@ -318,11 +318,11 @@ export type SupportApi = {
     from?: string;
     to?: string;
   }) => Promise<GraylogLogResponse>;
-  getGraylogStats: (params?: {
+  getGraylogStats?: (params?: {
     from?: string;
     to?: string;
   }) => Promise<GraylogStats>;
-  getGraylogSettings: () => Promise<GraylogSettings>;
-  updateGraylogSettings: (settings: Partial<GraylogSettings>) => Promise<GraylogSettings>;
-  testGraylogConnection: () => Promise<{ connected: boolean; message: string }>;
+  getGraylogSettings?: () => Promise<GraylogSettings>;
+  updateGraylogSettings?: (settings: Partial<GraylogSettings>) => Promise<GraylogSettings>;
+  testGraylogConnection?: () => Promise<{ connected: boolean; message: string }>;
 };
