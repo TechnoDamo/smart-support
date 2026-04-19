@@ -142,7 +142,7 @@ async def test_handoff_text_switches_ticket_to_pending_human(db, providers, mock
 
 
 @pytest.mark.asyncio
-async def test_escalate_action_with_answer_text_replies_to_user(db, providers, mock_llm, monkeypatch):
+async def test_escalate_action_with_answer_text_moves_to_pending_human(db, providers, mock_llm, monkeypatch):
     async def _hits(*args, **kwargs):
         return _fake_hit("График работы службы поддержки: по будням с 9:00 до 18:00.")
 
@@ -165,10 +165,10 @@ async def test_escalate_action_with_answer_text_replies_to_user(db, providers, m
     )
     await db.commit()
 
-    assert decision.action == "reply"
-    assert "9:00" in decision.response_text
+    assert decision.action == "escalate"
+    assert "оператор" in decision.response_text.lower()
     code = await get_ticket_status_code(db, ticket.status_id)
-    assert code == "pending_user"
+    assert code == "pending_human"
 
 
 @pytest.mark.asyncio

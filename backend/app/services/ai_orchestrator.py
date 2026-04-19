@@ -249,24 +249,16 @@ async def handle_ticket(
         )
 
     if action == "escalate":
-        if _looks_like_handoff(response_text) or not response_text:
-            return await _finish_with_escalation(
-                session,
-                chat=chat,
-                ticket=ticket,
-                reason=escalation_reason or "AI решил передать вопрос человеку",
-                response_text=response_text,
-            )
-        logger.warning(
-            "AI вернул action=escalate, но с текстом ответа; продолжаем как reply (ticket=%s)",
-            ticket.id,
+        final_escalation_text = (
+            response_text if _looks_like_handoff(response_text) or not response_text
+            else _DEFAULT_ESCALATION_TEXT
         )
-        return await _finish_with_reply(
+        return await _finish_with_escalation(
             session,
             chat=chat,
             ticket=ticket,
-            hits=hits,
-            response_text=response_text,
+            reason=escalation_reason or "AI решил передать вопрос человеку",
+            response_text=final_escalation_text,
         )
 
     logger.warning(
