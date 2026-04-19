@@ -1864,7 +1864,7 @@ export default function SupportWorkspacePage() {
                     <td className="px-3 py-2">{toHumanDate(doc.deleted_at)}</td>
                     <td className="px-3 py-2">
                       <button
-                        className="btn px-2 py-1 text-xs"
+                        className="btn flex gap-1 px-2 py-1 text-xs"
                         onClick={() => onDeleteKbDocument(doc.id)}
                         disabled={Boolean(doc.deleted_at)}
                       >
