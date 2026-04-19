@@ -23,7 +23,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./elasticsearch_data:/usr/share/elasticsearch/data
     networks:
       - graylog
 
@@ -61,6 +61,5 @@ networks:
 
 volumes:
   mongodb_data:
-  elasticsearch_data:
   graylog_data:
   graylog_journal:
