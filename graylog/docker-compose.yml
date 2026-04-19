@@ -58,8 +58,28 @@ services:
     networks:
       - graylog
 
+  graylog-init:
+    profiles: ["graylog"]
+    image: curlimages/curl:8.8.0
+    container_name: smart-support-graylog-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/init/init-graylog.sh"]
+    environment:
+      - GRAYLOG_URL=http://graylog:9000
+      - GRAYLOG_USER=admin
+      - GRAYLOG_ADMIN_PASSWORD=${GRAYLOG_ADMIN_PASSWORD:-admin}
+      - GRAYLOG_INPUT_TITLE=${GRAYLOG_INPUT_TITLE:-Smart Support Backend GELF TCP}
+      - GRAYLOG_INPUT_PORT=${GRAYLOG_INPUT_PORT:-12201}
+    volumes:
+      - ./init:/init:ro
+    depends_on:
+      - graylog
+    networks:
+      - graylog
+
 networks:
   graylog:
+    name: smart-support_graylog
     driver: bridge
 
 volumes:
