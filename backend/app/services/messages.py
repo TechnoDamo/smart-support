@@ -57,6 +57,7 @@ async def add_user_message(session: AsyncSession, chat: Chat, text: str) -> tupl
         text=text,
     )
     session.add(message)
+    chat.updated_at = datetime.now(timezone.utc)
     await session.flush()
     return message, ticket
 
@@ -83,6 +84,7 @@ async def add_outgoing_message(
         text=text,
     )
     session.add(message)
+    chat.updated_at = datetime.now(timezone.utc)
     await session.flush()
 
     await change_ticket_status(
