@@ -46,7 +46,14 @@ def _rrf_fuse(dense_hits: list[tuple[str, float, dict]],
               sparse_hits: list[tuple[str, float, dict]],
               dense_weight: float, sparse_weight: float,
               top_k: int, rrf_k: int = 60) -> list[VectorSearchHit]:
-    """Объединение по Reciprocal Rank Fusion с весами."""
+    """Объединение по Reciprocal Rank Fusion с весами.
+
+    Сырой RRF даёт крошечные значения (например, при k=60 максимум ≈ 1/61 ≈ 0.0164),
+    что делает любой порог ``min_score`` в [0, 1] бессмысленным. Поэтому нормализуем
+    итоговые скоры: умножаем на ``(rrf_k + 1) / (dense_weight + sparse_weight)``,
+    так чтобы теоретический максимум (оба поиска вернули точку первой) равнялся 1.0.
+    Теперь ``RAG_RETRIEVAL_MIN_SCORE = 0.2`` означает «не хуже 20 % от идеального ранга».
+    """
     scores: dict[str, float] = {}
     payloads: dict[str, dict] = {}
     for rank, (pid, _s, pl) in enumerate(dense_hits, start=1):
@@ -55,8 +62,15 @@ def _rrf_fuse(dense_hits: list[tuple[str, float, dict]],
     for rank, (pid, _s, pl) in enumerate(sparse_hits, start=1):
         scores[pid] = scores.get(pid, 0.0) + sparse_weight / (rrf_k + rank)
         payloads.setdefault(pid, pl)
+
+    total_weight = dense_weight + sparse_weight
+    norm = (rrf_k + 1) / total_weight if total_weight > 0 else 1.0
+
     merged = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-    return [VectorSearchHit(point_id=pid, score=s, payload=payloads[pid]) for pid, s in merged]
+    return [
+        VectorSearchHit(point_id=pid, score=s * norm, payload=payloads[pid])
+        for pid, s in merged
+    ]
 
 
 class MockVectorStore(VectorStore):

@@ -1,6 +1,9 @@
 """Интеграция с Telegram: обработка webhook и опциональный polling."""
+
 from __future__ import annotations
 
+import hashlib
+import logging
 from datetime import datetime, timezone
 
 import httpx
@@ -16,24 +19,45 @@ from app.services.ai_orchestrator import maybe_dispatch_ai
 from app.services.chats import get_or_create_chat, get_or_create_user_by_telegram
 from app.services.messages import add_user_message
 
+logger = logging.getLogger(__name__)
+
 SETTING_TELEGRAM_POLLING_OFFSET = "telegram_polling_offset"
+SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED = "telegram_polling_webhook_cleared"
 
 
 async def dispatch_ai_for_ticket(ticket_id, chat_id) -> None:
-    """Отдельно запускает AI после фиксации входящего сообщения."""
-    providers = get_providers()
-    async with session_scope() as session:
-        ticket = (await session.execute(select(Ticket).where(Ticket.id == ticket_id))).scalar_one_or_none()
-        chat = (await session.execute(select(Chat).where(Chat.id == chat_id))).scalar_one_or_none()
-        if ticket is None or chat is None:
-            return
-        await maybe_dispatch_ai(
-            session,
-            ticket=ticket,
-            chat=chat,
-            llm=providers.llm,
-            embedding=providers.embedding,
-            vector_store=providers.vector_store,
+    """Отдельно запускает AI после фиксации входящего сообщения.
+
+    Любые ошибки логируются с трейсбэком — фоновая задача не должна
+    «проглатывать» сбои провайдеров молча.
+    """
+    try:
+        providers = get_providers()
+        async with session_scope() as session:
+            ticket = (
+                await session.execute(select(Ticket).where(Ticket.id == ticket_id))
+            ).scalar_one_or_none()
+            chat = (
+                await session.execute(select(Chat).where(Chat.id == chat_id))
+            ).scalar_one_or_none()
+            if ticket is None or chat is None:
+                logger.warning(
+                    "dispatch_ai_for_ticket: ticket=%s or chat=%s not found",
+                    ticket_id, chat_id,
+                )
+                return
+            await maybe_dispatch_ai(
+                session,
+                ticket=ticket,
+                chat=chat,
+                llm=providers.llm,
+                embedding=providers.embedding,
+                vector_store=providers.vector_store,
+            )
+    except Exception:
+        logger.exception(
+            "dispatch_ai_for_ticket failed (ticket=%s, chat=%s)",
+            ticket_id, chat_id,
         )
 
 
@@ -76,29 +100,104 @@ async def process_telegram_update(session: AsyncSession, update: dict) -> dict:
 
 
 async def _get_polling_offset(session: AsyncSession) -> int | None:
-    value = (await session.execute(
-        select(AppSetting.value).where(AppSetting.key == SETTING_TELEGRAM_POLLING_OFFSET)
-    )).scalar_one_or_none()
+    value = (
+        await session.execute(
+            select(AppSetting.value).where(
+                AppSetting.key == SETTING_TELEGRAM_POLLING_OFFSET
+            )
+        )
+    ).scalar_one_or_none()
     return int(value) if value is not None else None
 
 
 async def _set_polling_offset(session: AsyncSession, offset: int) -> None:
-    setting = (await session.execute(
-        select(AppSetting).where(AppSetting.key == SETTING_TELEGRAM_POLLING_OFFSET)
-    )).scalar_one_or_none()
+    setting = (
+        await session.execute(
+            select(AppSetting).where(AppSetting.key == SETTING_TELEGRAM_POLLING_OFFSET)
+        )
+    ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if setting is None:
-        session.add(AppSetting(key=SETTING_TELEGRAM_POLLING_OFFSET, value=str(offset), updated_at=now))
+        session.add(
+            AppSetting(
+                key=SETTING_TELEGRAM_POLLING_OFFSET, value=str(offset), updated_at=now
+            )
+        )
     else:
         setting.value = str(offset)
         setting.updated_at = now
 
 
+def _polling_marker(bot_token: str) -> str:
+    """Возвращает безопасный маркер токена для app_settings."""
+    return hashlib.sha256(bot_token.encode("utf-8")).hexdigest()
+
+
+async def _get_app_setting_value(session: AsyncSession, key: str) -> str | None:
+    return (
+        await session.execute(select(AppSetting.value).where(AppSetting.key == key))
+    ).scalar_one_or_none()
+
+
+async def _set_app_setting_value(session: AsyncSession, key: str, value: str) -> None:
+    setting = (
+        await session.execute(select(AppSetting).where(AppSetting.key == key))
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if setting is None:
+        session.add(AppSetting(key=key, value=value, updated_at=now))
+    else:
+        setting.value = value
+        setting.updated_at = now
+
+
+async def _delete_telegram_webhook(
+    client: httpx.AsyncClient,
+    *,
+    settings,
+) -> None:
+    """Удаляет webhook у бота, чтобы polling работал без конфликта 409."""
+    url = (
+        f"{settings.telegram_api_base_url.rstrip('/')}"
+        f"/bot{settings.telegram_bot_token}/deleteWebhook"
+    )
+    response = await client.post(
+        url,
+        params={"drop_pending_updates": "false"},
+    )
+    response.raise_for_status()
+
+
+async def _ensure_polling_mode(client: httpx.AsyncClient, *, settings) -> None:
+    """Гарантирует, что Telegram-бот переведён в polling-only режим."""
+    marker = _polling_marker(settings.telegram_bot_token)
+    async with session_scope() as session:
+        current = await _get_app_setting_value(
+            session, SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED
+        )
+        if current == marker:
+            return
+
+    await _delete_telegram_webhook(client, settings=settings)
+
+    async with session_scope() as session:
+        await _set_app_setting_value(
+            session, SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED, marker
+        )
+
+
 async def poll_telegram_updates() -> int:
     """Забирает пачку update-ов через getUpdates и обрабатывает их последовательно."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     settings = get_settings()
     if not settings.telegram_bot_token:
+        logger.warning("Telegram bot token not configured, skipping polling")
         return 0
+
+    logger.debug("Polling Telegram for updates...")
 
     async with session_scope() as session:
         offset = await _get_polling_offset(session)
@@ -112,12 +211,32 @@ async def poll_telegram_updates() -> int:
         params["offset"] = offset
 
     url = f"{settings.telegram_api_base_url.rstrip('/')}/bot{settings.telegram_bot_token}/getUpdates"
-    async with httpx.AsyncClient(timeout=settings.telegram_polling_request_timeout_seconds) as client:
+    async with httpx.AsyncClient(
+        timeout=settings.telegram_polling_request_timeout_seconds
+    ) as client:
+        await _ensure_polling_mode(client, settings=settings)
         response = await client.get(url, params=params)
+        if response.status_code == 409:
+            logger.warning(
+                "Telegram getUpdates returned 409 Conflict, deleting webhook and retrying once"
+            )
+            await _delete_telegram_webhook(client, settings=settings)
+            async with session_scope() as session:
+                await _set_app_setting_value(
+                    session,
+                    SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED,
+                    _polling_marker(settings.telegram_bot_token),
+                )
+            response = await client.get(url, params=params)
         response.raise_for_status()
         payload = response.json()
 
     updates = payload.get("result") or []
+    if updates:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Received {len(updates)} update(s) from Telegram")
     processed = 0
     for update in updates:
         update_id = int(update.get("update_id", 0))
@@ -132,4 +251,11 @@ async def poll_telegram_updates() -> int:
                 processed += 1
         if ticket_id is not None and chat_id is not None:
             await dispatch_ai_for_ticket(ticket_id, chat_id)
+
+    if processed > 0:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Processed {processed} message(s) from Telegram")
+
     return processed

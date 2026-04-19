@@ -1,17 +1,39 @@
 """Конфигурация приложения. Все параметры читаются из переменных окружения."""
+
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = BACKEND_DIR.parent
+
+
+def _parse_origins(value: object) -> list[str]:
+    """Нормализует origins из CSV-строки, JSON-массива или списка."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            return []
+        if raw_value.startswith("["):
+            parsed = json.loads(raw_value)
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in raw_value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(ROOT_DIR / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -22,6 +44,15 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8081
     log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "text"
+    cors_allowed_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
+    cors_allow_origin_regex: str | None = None
+
+    # ─── Graylog Logging ─────────────────────────────────────────────────────
+    graylog_enabled: bool = False
+    graylog_host: str = "localhost"
+    graylog_port: int = 12201
+    graylog_protocol: Literal["tcp", "udp"] = "tcp"
 
     # ─── БД ──────────────────────────────────────────────────────────────────
     database_url: str = "sqlite+aiosqlite:///./smart_support.db"
@@ -60,7 +91,7 @@ class Settings(BaseSettings):
     channel_telegram_provider: Literal["telegram", "mock"] = "mock"
     telegram_bot_token: str = ""
     telegram_api_base_url: str = "https://api.telegram.org"
-    telegram_polling_enabled: bool = False
+    telegram_polling_enabled: bool = True
     telegram_polling_limit: int = 50
     telegram_polling_timeout_seconds: int = 0
     telegram_polling_request_timeout_seconds: int = 35
@@ -92,6 +123,17 @@ class Settings(BaseSettings):
     @property
     def prompts_path(self) -> Path:
         return Path(self.prompts_dir)
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """Возвращает origins в виде списка для CORS middleware."""
+        return _parse_origins(self.cors_allowed_origins)
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _validate_cors_allowed_origins(cls, value: object) -> str:
+        """Принимает CSV, JSON-массив или список и приводит к CSV-форме."""
+        return ",".join(_parse_origins(value))
 
 
 @lru_cache

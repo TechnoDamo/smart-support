@@ -1,6 +1,7 @@
 """Роуты сообщений: получение истории и отправка оператором."""
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -15,6 +16,8 @@ from app.schemas.messages import Message as MessageSchema, SendMessageRequest
 from app.services.ai_orchestrator import maybe_dispatch_ai
 from app.services.messages import add_outgoing_message
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/chats", tags=["messages"])
 
 
@@ -22,21 +25,32 @@ async def _ai_dispatch_task(ticket_id: uuid.UUID, chat_id: uuid.UUID) -> None:
     """Фоновая задача: запуск AI-оркестратора после нового пользовательского сообщения.
 
     Выполняется вне исходной HTTP-транзакции (своя сессия).
+    Любые ошибки логируются с трейсбэком — фоновая задача не должна «проглатывать» сбои.
     """
-    from app.providers.registry import get_providers
-    providers = get_providers()
-    async with session_scope() as session:
-        r = await session.execute(select(Ticket).where(Ticket.id == ticket_id))
-        ticket = r.scalar_one_or_none()
-        r = await session.execute(select(Chat).where(Chat.id == chat_id))
-        chat = r.scalar_one_or_none()
-        if ticket is None or chat is None:
-            return
-        await maybe_dispatch_ai(
-            session, ticket=ticket, chat=chat,
-            llm=providers.llm,
-            embedding=providers.embedding,
-            vector_store=providers.vector_store,
+    try:
+        from app.providers.registry import get_providers
+        providers = get_providers()
+        async with session_scope() as session:
+            r = await session.execute(select(Ticket).where(Ticket.id == ticket_id))
+            ticket = r.scalar_one_or_none()
+            r = await session.execute(select(Chat).where(Chat.id == chat_id))
+            chat = r.scalar_one_or_none()
+            if ticket is None or chat is None:
+                logger.warning(
+                    "_ai_dispatch_task: ticket=%s or chat=%s not found",
+                    ticket_id, chat_id,
+                )
+                return
+            await maybe_dispatch_ai(
+                session, ticket=ticket, chat=chat,
+                llm=providers.llm,
+                embedding=providers.embedding,
+                vector_store=providers.vector_store,
+            )
+    except Exception:
+        logger.exception(
+            "_ai_dispatch_task failed (ticket=%s, chat=%s)",
+            ticket_id, chat_id,
         )
 
 

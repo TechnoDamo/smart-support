@@ -4,9 +4,12 @@
 Dense — от внешнего провайдера (OpenAI-compatible) либо детерминированный mock.
 Sparse — локально через rank-bm25 / простой токенизатор; это обеспечивает гибридный поиск.
 """
+
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import math
 import re
 from abc import ABC, abstractmethod
@@ -16,6 +19,8 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,11 +36,26 @@ class SparseVector:
     values: list[float]
 
 
-_TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
+_TOKEN_RE = re.compile(r"[\w./-]+", re.UNICODE)
+_TOKEN_SPLIT_RE = re.compile(r"[-_/]+")
 
 
 def tokenize(text: str) -> list[str]:
-    return [t.lower() for t in _TOKEN_RE.findall(text or "")]
+    tokens: list[str] = []
+    for raw in _TOKEN_RE.findall(text or ""):
+        token = raw.lower().strip("._/")
+        if not token:
+            continue
+        tokens.append(token)
+
+        # Для технических идентификаторов важно уметь матчить как полную форму
+        # (`52931-2008`, `Эликонт-100`), так и отдельные составные части.
+        if any(sep in token for sep in "-_/"):
+            for part in _TOKEN_SPLIT_RE.split(token):
+                normalized = part.strip("._/")
+                if normalized and normalized != token:
+                    tokens.append(normalized)
+    return tokens
 
 
 @dataclass
@@ -45,18 +65,17 @@ class BM25Encoder:
     Словарь строится по мере поступления текстов. Индекс токена в словаре = индекс
     в sparse-векторе. Значение = tf * idf-приближение.
     """
+
     k1: float = 1.5
     b: float = 0.75
-    vocab: dict[str, int] = field(default_factory=dict)
     df: Counter = field(default_factory=Counter)
     total_docs: int = 0
     avg_doc_len: float = 0.0
     _total_len: int = 0
 
     def _token_id(self, token: str) -> int:
-        if token not in self.vocab:
-            self.vocab[token] = len(self.vocab)
-        return self.vocab[token]
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(digest, "big") & 0x7FFFFFFF
 
     def fit_add(self, tokens_list: list[list[str]]) -> None:
         """Добавляет документы в статистику."""
@@ -80,7 +99,9 @@ class BM25Encoder:
             # idf со сглаживанием (+1 в знаменателе и логарифме)
             n = self.df.get(tok, 0)
             idf = math.log(1 + (self.total_docs - n + 0.5) / (n + 0.5))
-            denom = tf + self.k1 * (1 - self.b + self.b * doc_len / max(self.avg_doc_len, 1))
+            denom = tf + self.k1 * (
+                1 - self.b + self.b * doc_len / max(self.avg_doc_len, 1)
+            )
             score = idf * (tf * (self.k1 + 1)) / max(denom, 1e-9)
             idxs.append(idx)
             vals.append(float(score))
@@ -93,8 +114,7 @@ class EmbeddingProvider(ABC):
         self.bm25 = BM25Encoder()
 
     @abstractmethod
-    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-        ...
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]: ...
 
     def fit_sparse(self, texts: list[str]) -> None:
         self.bm25.fit_add([tokenize(t) for t in texts])
@@ -107,12 +127,25 @@ class EmbeddingProvider(ABC):
         out: list[EmbeddingVector] = []
         for d, t in zip(dense, texts):
             s = self.encode_sparse(t)
-            out.append(EmbeddingVector(dense=d, sparse_indices=s.indices, sparse_values=s.values))
+            out.append(
+                EmbeddingVector(
+                    dense=d, sparse_indices=s.indices, sparse_values=s.values
+                )
+            )
         return out
 
 
 class OpenAiCompatibleEmbedding(EmbeddingProvider):
-    """Dense-эмбеддинги через /v1/embeddings."""
+    """Dense-эмбеддинги через /v1/embeddings.
+
+    Надёжность:
+      - детектирует ``{"error": ...}`` в 200-ответах (роутеры так делают);
+      - ретраит сетевые и 5xx-ошибки с экспоненциальной задержкой;
+      - бросает ``RuntimeError`` с внятным сообщением, а не ``KeyError``.
+    """
+
+    MAX_ATTEMPTS = 4
+    BASE_BACKOFF_SECONDS = 0.5
 
     def __init__(self, settings: Settings):
         super().__init__(settings.embedding_vector_size)
@@ -120,21 +153,54 @@ class OpenAiCompatibleEmbedding(EmbeddingProvider):
         self._api_key = settings.embedding_api_key
         self._model = settings.embedding_model
 
-    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
+    async def _post_once(self, client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                f"{self._base_url}/embeddings",
-                json={"model": self._model, "input": texts},
-                headers=headers,
-            )
-            r.raise_for_status()
+        r = await client.post(
+            f"{self._base_url}/embeddings",
+            json={"model": self._model, "input": texts},
+            headers=headers,
+        )
+        r.raise_for_status()
+        try:
             data = r.json()
-            return [item["embedding"] for item in data["data"]]
+        except ValueError as e:  # не-JSON ответ
+            raise RuntimeError(
+                f"embedding provider returned non-JSON body (status={r.status_code}): {r.text[:200]!r}"
+            ) from e
+        if "error" in data:
+            raise RuntimeError(
+                f"embedding provider error: {data['error']}"
+            )
+        if "data" not in data:
+            raise RuntimeError(
+                f"embedding provider missing 'data' key; got keys={list(data)}, body={r.text[:200]!r}"
+            )
+        return [item["embedding"] for item in data["data"]]
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        last_exc: Exception | None = None
+        async with httpx.AsyncClient(timeout=60) as client:
+            for attempt in range(1, self.MAX_ATTEMPTS + 1):
+                try:
+                    return await self._post_once(client, texts)
+                except (httpx.HTTPError, RuntimeError) as exc:
+                    last_exc = exc
+                    if attempt == self.MAX_ATTEMPTS:
+                        break
+                    delay = self.BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "embedding attempt %d/%d failed (%s); retrying in %.1fs",
+                        attempt, self.MAX_ATTEMPTS, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+        assert last_exc is not None
+        raise RuntimeError(
+            f"embedding provider failed after {self.MAX_ATTEMPTS} attempts: {last_exc}"
+        ) from last_exc
 
 
 class MockEmbedding(EmbeddingProvider):
