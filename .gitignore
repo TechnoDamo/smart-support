@@ -1,1 +1,52 @@
 .env
+
+# Log files
+*.log
+backend/server.log
+frontend-support/frontend.log
+.swagger-server*.log
+.swagger-server*.pid
+
+# PDF files - exclude large binary files
+*.pdf
+
+# Test documentation directory
+test_docs/
+
+# Backend storage directories (contain uploaded files)
+backend/storage/
+
+# Node modules
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+*.dockerignore
