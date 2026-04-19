@@ -1,4 +1,5 @@
 """E2E-тесты HTTP-слоя через ASGI-клиент (без сети)."""
+
 from __future__ import annotations
 
 import pytest
@@ -70,7 +71,8 @@ async def test_rag_upload_and_list(client):
 
     r = await client.get("/rag/documents")
     assert r.status_code == 200
-    ids = [d["id"] for d in r.json()]
+    data = r.json()
+    ids = [d["id"] for d in data["items"]]
     assert doc_id in ids
 
     r = await client.delete(f"/rag/documents/{doc_id}")

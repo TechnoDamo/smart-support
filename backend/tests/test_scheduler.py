@@ -14,7 +14,11 @@ from app.services.messages import add_outgoing_message, add_user_message
 from app.services.rag_worker import process_ingestion_jobs
 from app.services.refs import get_default_rag_collection, get_ticket_status_code
 from app.services.scheduler import close_inactive_tickets
-from app.services.telegram_integration import SETTING_TELEGRAM_POLLING_OFFSET, poll_telegram_updates
+from app.services.telegram_integration import (
+    SETTING_TELEGRAM_POLLING_OFFSET,
+    SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED,
+    poll_telegram_updates,
+)
 
 
 @pytest.mark.asyncio
@@ -95,25 +99,19 @@ async def test_telegram_polling_fetches_updates(engine, providers, db, monkeypat
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {
-                "ok": True,
-                "result": [
-                    {
-                        "update_id": 101,
-                        "message": {
-                            "text": "polling message",
-                            "chat": {"id": 7777},
-                            "from": {"id": 7777, "first_name": "Poll"},
-                        },
-                    }
-                ],
-            }
+            return self._payload
 
     class FakeClient:
+        deleted_webhook = False
+
         def __init__(self, *args, **kwargs):
             pass
 
@@ -123,10 +121,31 @@ async def test_telegram_polling_fetches_updates(engine, providers, db, monkeypat
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
+        async def post(self, url, params=None):
+            assert "deleteWebhook" in url
+            assert params["drop_pending_updates"] == "false"
+            FakeClient.deleted_webhook = True
+            return FakeResponse({"ok": True, "result": True})
+
         async def get(self, url, params=None):
             assert "getUpdates" in url
             assert params["limit"] >= 1
-            return FakeResponse()
+            assert FakeClient.deleted_webhook is True
+            return FakeResponse(
+                {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 101,
+                            "message": {
+                                "text": "polling message",
+                                "chat": {"id": 7777},
+                                "from": {"id": 7777, "first_name": "Poll"},
+                            },
+                        }
+                    ],
+                }
+            )
 
     monkeypatch.setattr("app.services.telegram_integration.httpx.AsyncClient", FakeClient)
 
@@ -140,3 +159,12 @@ async def test_telegram_polling_fetches_updates(engine, providers, db, monkeypat
         select(AppSetting.value).where(AppSetting.key == SETTING_TELEGRAM_POLLING_OFFSET)
     )).scalar_one()
     assert offset == "102"
+
+    polling_mode_marker = (
+        await db.execute(
+            select(AppSetting.value).where(
+                AppSetting.key == SETTING_TELEGRAM_POLLING_WEBHOOK_CLEARED
+            )
+        )
+    ).scalar_one_or_none()
+    assert polling_mode_marker is not None
