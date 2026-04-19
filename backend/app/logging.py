@@ -20,6 +20,10 @@ from app.config import get_settings
 request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
 user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
 endpoint_var: ContextVar[Optional[str]] = ContextVar("endpoint", default=None)
+STANDARD_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys()) | {
+    "message",
+    "asctime",
+}
 
 
 class GELFHandler(logging.Handler):
@@ -31,6 +35,7 @@ class GELFHandler(logging.Handler):
         self.port = port
         self.protocol = protocol.lower()
         self.socket = None
+        self._formatter = logging.Formatter()
 
     def connect(self):
         """Establish connection to Graylog."""
@@ -84,11 +89,11 @@ class GELFHandler(logging.Handler):
             "_line": record.lineno,
         }
 
-        # Add extra fields from record
-        if hasattr(record, "extra"):
-            for key, value in record.extra.items():
-                if key not in gelf and not key.startswith("_"):
-                    gelf[f"_{key}"] = value
+        # В стандартном logging extra-поля попадают прямо в __dict__ записи.
+        for key, value in record.__dict__.items():
+            if key in STANDARD_LOG_RECORD_FIELDS or key.startswith("_"):
+                continue
+            gelf[f"_{key}"] = self._normalize_value(value)
 
         # Add context variables
         request_id = request_id_var.get()
@@ -108,10 +113,18 @@ class GELFHandler(logging.Handler):
             gelf["_exception"] = {
                 "type": record.exc_info[0].__name__ if record.exc_info[0] else None,
                 "message": str(record.exc_info[1]) if record.exc_info[1] else None,
-                "traceback": self.formatException(record.exc_info),
+                "traceback": self._formatter.formatException(record.exc_info),
             }
 
         return gelf
+
+    def _normalize_value(self, value: Any) -> Any:
+        """Приводит extra-поле к JSON-сериализуемому виду для GELF."""
+        try:
+            json.dumps(value)
+            return value
+        except TypeError:
+            return str(value)
 
     def _severity_to_syslog(self, level: int) -> int:
         """Convert Python logging level to syslog severity."""
@@ -251,13 +264,19 @@ def setup_logging():
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to setup Graylog logging: {e}")
 
-    # Set SQLAlchemy logging level
-    logging.getLogger("sqlalchemy.engine").setLevel(
-        logging.WARNING if settings.app_env == "prod" else logging.INFO
+    # Raw SQL statements are too noisy for day-to-day work. We keep engine logs
+    # quiet unless the whole app is explicitly in DEBUG mode.
+    sqlalchemy_level = (
+        logging.INFO if settings.log_level.upper() == "DEBUG" else logging.WARNING
     )
+    logging.getLogger("sqlalchemy.engine").setLevel(sqlalchemy_level)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 
-    # Suppress noisy loggers
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # Keep access logs visible in normal operation so Graylog shows the full
+    # HTTP picture alongside our middleware logs.
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
+    # Suppress especially noisy third-party client logs.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
