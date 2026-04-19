@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbSession, ProvidersDep
-from app.db.models import Chat
+from app.db.models import Chat, Ticket
 from app.providers.registry import Providers
 from app.schemas.suggestions import SuggestionsRequest, SuggestionsResponse
 from app.services.suggestions import generate_suggestions
@@ -27,6 +27,10 @@ async def suggest(
     chat = r.scalar_one_or_none()
     if chat is None:
         raise HTTPException(404, "Чат не найден")
+    r = await session.execute(select(Ticket).where(Ticket.id == body.ticket_id))
+    ticket = r.scalar_one_or_none()
+    if ticket is None or ticket.chat_id != chat_id:
+        raise HTTPException(404, "Тикет не найден в этом чате")
     result = await generate_suggestions(
         session,
         chat_id=chat_id,
