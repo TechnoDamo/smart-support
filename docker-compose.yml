@@ -5,3 +5,4 @@ include:
   - ./embedding/docker-compose.yml
   - ./llm/docker-compose.yml
   - ./backend/docker-compose.yml
+  - ./graylog/docker-compose.yml

@@ -4,6 +4,9 @@ AI ?= cloud
 STORAGE ?= filesystem
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= docker-compose.yml
+LOAD_ENV := set -a; \
+	if [ -f ./.env ]; then . ./.env; fi; \
+	set +a;
 
 PROFILE_ARGS := $(if $(filter local-ai,$(AI)),--profile local-ai,)
 PROFILE_ARGS += $(if $(filter local-embedding,$(AI)),--profile local-embedding,)
@@ -11,11 +14,12 @@ PROFILE_ARGS += $(if $(filter local-llm,$(AI)),--profile local-llm,)
 PROFILE_ARGS += $(if $(filter minio,$(STORAGE)),--profile local-object-storage,)
 ALL_PROFILE_ARGS := --profile local-ai --profile local-embedding --profile local-llm --profile local-object-storage
 
-ENV_ARGS := VECTOR_STORE_PROVIDER=qdrant
+ENV_ARGS := VECTOR_STORE_PROVIDER=$${VECTOR_STORE_PROVIDER:-qdrant}
 ENV_ARGS += CHANNEL_TELEGRAM_PROVIDER=$${CHANNEL_TELEGRAM_PROVIDER:-mock}
-ENV_ARGS += DATABASE_URL=$${DATABASE_URL:-postgresql+asyncpg://$${POSTGRES_USER:-smart}:$${POSTGRES_PASSWORD:-smart}@postgres:5432/$${POSTGRES_DB:-smart}}
-ENV_ARGS += QDRANT_URL=$${QDRANT_URL:-http://qdrant:6333}
-ENV_ARGS += PROMPTS_DIR=$${PROMPTS_DIR:-/app/prompts}
+ENV_ARGS += DATABASE_URL=postgresql+asyncpg://$${POSTGRES_USER:-smart}:$${POSTGRES_PASSWORD:-smart}@postgres:5432/$${POSTGRES_DB:-smart}
+ENV_ARGS += QDRANT_URL=http://qdrant:6333
+ENV_ARGS += QDRANT_API_KEY=$${QDRANT_API_KEY:-}
+ENV_ARGS += PROMPTS_DIR=/app/prompts
 
 ifeq ($(STORAGE),filesystem)
 ENV_ARGS += OBJECT_STORAGE_PROVIDER=local
@@ -54,6 +58,7 @@ ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-http://embedding:8000/v1}
 else ifeq ($(AI),mock)
 ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-mock}
 ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-mock}
+ENV_ARGS += VECTOR_STORE_PROVIDER=mock
 else
 $(error Unsupported AI=$(AI). Use one of: cloud, local-embedding, local-llm, local-ai, mock)
 endif
@@ -83,25 +88,25 @@ help:
 	@echo "  MINIO_ROOT_PASSWORD=smartminio123       — пароль локального object storage"
 
 up:
-	@env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) up -d --build
+	@$(LOAD_ENV) env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) up -d --build
 
 down:
-	@$(COMPOSE) -f $(COMPOSE_FILE) $(ALL_PROFILE_ARGS) down
+	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) $(ALL_PROFILE_ARGS) down
 
 logs:
-	@$(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) logs -f
+	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) logs -f
 
 ps:
-	@$(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) ps
+	@$(LOAD_ENV) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) ps
 
 config:
-	@env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) config
+	@$(LOAD_ENV) env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) config
 
 pull:
-	@env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) pull
+	@$(LOAD_ENV) env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) pull
 
 restart:
-	@env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) up -d --build --force-recreate
+	@$(LOAD_ENV) env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) up -d --build --force-recreate
 
 up-cloud:
 	@$(MAKE) up AI=cloud

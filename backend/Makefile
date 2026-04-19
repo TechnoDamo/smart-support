@@ -5,6 +5,9 @@ UV_CACHE_DIR ?= .uv-cache
 PYTHON_VERSION ?= 3.12
 UV_ENV := UV_CACHE_DIR=$(abspath $(UV_CACHE_DIR))
 UV_RUN := $(UV_ENV) $(UV) run
+COMPOSE ?= docker compose
+COMPOSE_ENV_FILE ?= ../.env
+COMPOSE_CMD := $(COMPOSE) --env-file $(COMPOSE_ENV_FILE)
 
 help:
 	@echo "Цели:"
@@ -15,7 +18,7 @@ help:
 	@echo "  make current    — показать текущую ревизию БД"
 	@echo "  make revision MESSAGE=... — создать новую миграцию"
 	@echo "  make lock       — обновить uv.lock"
-	@echo "  make up         — поднять docker-compose (api only)"
+	@echo "  make up         — поднять docker-compose (api only) с env из ../.env"
 	@echo "  make down       — остановить docker-compose"
 	@echo "  make logs       — логи API из docker-compose"
 	@echo "  make clean      — удалить .venv и локальные кэши"
@@ -52,13 +55,13 @@ lock: check-uv
 	$(UV_ENV) $(UV) lock
 
 up:
-	docker compose up -d --build
+	$(COMPOSE_CMD) up -d --build
 
 down:
-	docker compose down
+	$(COMPOSE_CMD) down
 
 logs:
-	docker compose logs -f api
+	$(COMPOSE_CMD) logs -f api
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache htmlcov .coverage
