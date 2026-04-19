@@ -206,14 +206,14 @@ export const supportApi: SupportApi = {
 
 export const supportLabel = {
   mode(code: ChatModeCode): string {
-    if (code === 'full_ai') return 'AI consultant';
-    if (code === 'ai_assist') return 'AI assistant';
-    return 'No AI';
+    if (code === 'full_ai') return 'AI ведёт диалог';
+    if (code === 'ai_assist') return 'AI помогает';
+    return 'Без AI';
   },
   status(code: TicketStatusCode): string {
-    if (code === 'pending_ai') return 'pending_ai';
-    if (code === 'pending_human') return 'pending_human';
-    if (code === 'pending_user') return 'pending_user';
-    return 'closed';
+    if (code === 'pending_ai') return 'Ожидает AI';
+    if (code === 'pending_human') return 'Ожидает человека';
+    if (code === 'pending_user') return 'Ожидает клиента';
+    return 'Без активного тикета';
   }
 };

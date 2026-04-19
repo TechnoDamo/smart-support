@@ -2,6 +2,7 @@
 
 AI ?= cloud
 STORAGE ?= filesystem
+GRAYLOG ?= false
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= docker-compose.yml
 LOAD_ENV := set -a; \
@@ -12,7 +13,8 @@ PROFILE_ARGS := $(if $(filter local-ai,$(AI)),--profile local-ai,)
 PROFILE_ARGS += $(if $(filter local-embedding,$(AI)),--profile local-embedding,)
 PROFILE_ARGS += $(if $(filter local-llm,$(AI)),--profile local-llm,)
 PROFILE_ARGS += $(if $(filter minio,$(STORAGE)),--profile local-object-storage,)
-ALL_PROFILE_ARGS := --profile local-ai --profile local-embedding --profile local-llm --profile local-object-storage
+PROFILE_ARGS += $(if $(filter true,$(GRAYLOG)),--profile graylog,)
+ALL_PROFILE_ARGS := --profile local-ai --profile local-embedding --profile local-llm --profile local-object-storage --profile graylog
 
 ENV_ARGS := VECTOR_STORE_PROVIDER=$${VECTOR_STORE_PROVIDER:-qdrant}
 ENV_ARGS += CHANNEL_TELEGRAM_PROVIDER=$${CHANNEL_TELEGRAM_PROVIDER:-mock}
@@ -71,6 +73,7 @@ help:
 	@echo "  make up AI=local-llm STORAGE=minio       — локальный llama.cpp + MinIO"
 	@echo "  make up AI=local-ai STORAGE=minio        — локальные llama.cpp + vLLM + MinIO"
 	@echo "  make up AI=mock STORAGE=filesystem       — backend на mock-провайдерах"
+	@echo "  make up ... GRAYLOG=true                 — дополнительно поднять Graylog"
 	@echo "  make down                                — остановить весь стек"
 	@echo "  make logs                                — поток логов всех сервисов"
 	@echo "  make ps                                  — список контейнеров"
@@ -78,6 +81,7 @@ help:
 	@echo ""
 	@echo "Параметры AI: cloud | local-embedding | local-llm | local-ai | mock"
 	@echo "Параметры STORAGE: filesystem | minio"
+	@echo "Параметры GRAYLOG: false | true"
 	@echo ""
 	@echo "Частые параметры:"
 	@echo "  OPENAI_API_KEY=...                       — если AI идёт во внешний OpenAI-совместимый сервис"

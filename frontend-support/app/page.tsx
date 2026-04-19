@@ -87,10 +87,10 @@ function isBackendConnectivityError(error: unknown): boolean {
 }
 
 const NAV_SECTIONS: ReadonlyArray<{ key: NavSection; label: string }> = [
-  { key: 'inbox', label: 'Inbox' },
-  { key: 'knowledge', label: 'Knowledge Base' },
-  { key: 'settings', label: 'Settings' },
-  { key: 'analytics', label: 'Analytics' }
+  { key: 'inbox', label: 'Диалоги' },
+  { key: 'knowledge', label: 'База знаний' },
+  { key: 'settings', label: 'Настройки' },
+  { key: 'analytics', label: 'Аналитика' }
 ];
 
 const KB_PAGE_SIZE = 20;
@@ -144,7 +144,7 @@ function toChatTimeLabel(value?: string | null) {
     });
   }
 
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weekdays = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
   return weekdays[date.getDay()];
 }
 
@@ -176,16 +176,16 @@ function formatTicketStatus(status: TicketStatusCode) {
 }
 
 function actorLabel(actor: string) {
-  if (actor === 'user') return 'Client';
-  if (actor === 'operator') return 'Operator';
+  if (actor === 'user') return 'Клиент';
+  if (actor === 'operator') return 'Оператор';
   if (actor === 'ai_operator') return 'AI';
   return actor;
 }
 
 function messageSenderLabel(entity: Message['entity']) {
-  if (entity === 'user') return 'Client';
-  if (entity === 'ai_operator') return 'AI Operator';
-  return 'Operator';
+  if (entity === 'user') return 'Клиент';
+  if (entity === 'ai_operator') return 'AI-оператор';
+  return 'Оператор';
 }
 
 function parseFileExt(fileName: string) {
@@ -198,9 +198,9 @@ function getRowStatusCode(row: ChatRow): TicketStatusCode {
 }
 
 function deriveUserDisplay(chat?: Chat) {
-  if (!chat) return 'Unknown Client';
+  if (!chat) return 'Неизвестный клиент';
   const suffix = chat.user_id.slice(0, 8);
-  return `Client #${suffix}`;
+  return `Клиент #${suffix}`;
 }
 
 function getPlatformIcon(chat?: Chat) {
@@ -211,7 +211,7 @@ function getPlatformIcon(chat?: Chat) {
     return (
       <div className="flex items-center gap-1 text-xs text-blue-500">
         <MessageSquare size={12} />
-        <span>Telegram</span>
+        <span>Телеграм</span>
       </div>
     );
   }
@@ -588,7 +588,7 @@ export default function SupportWorkspacePage() {
               activeTicket,
               lastMessage,
               lastMessageAt,
-              snippet: lastMessage?.text ?? activeTicket?.summary ?? activeTicket?.title ?? 'No messages'
+              snippet: lastMessage?.text ?? activeTicket?.summary ?? activeTicket?.title ?? 'Нет сообщений'
             }
           ];
         });
@@ -614,7 +614,7 @@ export default function SupportWorkspacePage() {
         if (error instanceof ApiError) {
           setInboxError(error.message);
         } else {
-          setInboxError('Failed to load chat list');
+          setInboxError('Не удалось загрузить список чатов');
         }
 
         if (isBackendConnectivityError(error)) {
@@ -1283,7 +1283,7 @@ export default function SupportWorkspacePage() {
         <label className="relative">
           <input
             className="field pl-8"
-             placeholder="Search conversations"
+             placeholder="Поиск по чатам"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -1302,7 +1302,7 @@ export default function SupportWorkspacePage() {
             <option value="closed">Без активного тикета</option>
           </select>
 
-          <button className="btn justify-center" onClick={onManualRefresh} aria-label="Refresh">
+          <button className="btn justify-center" onClick={onManualRefresh} aria-label="Обновить">
             <RefreshCcw size={14} />
           </button>
         </div>
@@ -1347,7 +1347,6 @@ export default function SupportWorkspacePage() {
                   {getPlatformIcon(row.chat)}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="badge badge-muted">{formatTicketStatus(statusCode)}</span>
                   <span className="badge badge-muted">{toChatTimeLabel(row.lastMessageAt)}</span>
                   {aiAutoReply ? <span className="ai-dot" title="AI отвечает автоматически" /> : null}
                 </div>
@@ -1432,7 +1431,7 @@ export default function SupportWorkspacePage() {
       <header className="surface fade-in-up mb-3 p-2">
         <div className="flex items-center justify-between gap-2 overflow-x-auto whitespace-nowrap">
           <div className="inline-flex items-center gap-2">
-            <div className="px-1 text-sm font-semibold">Smart Support</div>
+            <div className="px-1 text-sm font-semibold">Смарт Поддержка</div>
             <div className="relative rounded-xl bg-[var(--bg-soft)] p-1">
               <span
                 className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-lg bg-[var(--accent)] shadow-[0_8px_20px_rgba(47,125,244,0.3)] transition-transform duration-300 ease-out"
@@ -1467,7 +1466,7 @@ export default function SupportWorkspacePage() {
           <div className="inline-flex items-center gap-2">
             <div className="soft-surface flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[var(--muted)]">
               {serverStatus === 'online' ? <Wifi size={13} /> : <WifiOff size={13} />}
-              {serverStatus === 'online' ? 'Online' : serverStatus === 'offline' ? 'Offline' : 'Проверка'}
+              {serverStatus === 'online' ? 'Онлайн' : serverStatus === 'offline' ? 'Офлайн' : 'Проверка'}
             </div>
 
             <ThemeToggle theme={themeMode} onChange={setThemeMode} />
@@ -1587,12 +1586,8 @@ export default function SupportWorkspacePage() {
                           <div className="truncate text-sm font-semibold">
                             {activeTicketDetails?.title ?? selectedRow.activeTicket?.title ?? 'История чата'}
                           </div>
-                          <span className="badge badge-muted">
-                            {translateMode((chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist')}
-                          </span>
-                          <span className="badge badge-muted">
-                            {formatTicketStatus(getRowStatusCode(selectedRow))}
-                          </span>
+                        
+                         
                         </div>
                         <div className="mt-0.5 truncate text-xs text-[var(--muted)]">
                           {deriveUserDisplay(chatDetails ?? selectedRow.chat)}
@@ -1606,12 +1601,11 @@ export default function SupportWorkspacePage() {
                           </button>
                         ) : null}
                         <select
-                          className="field h-9 min-w-[155px] border-2 border-[var(--accent)] bg-[var(--panel-solid)] py-1.5 text-xs font-medium shadow-[0_0_0_1px_rgba(47,125,244,0.24)]"
+                          className="field h-9 min-w-[155px]  border-2 border-[var(--accent)] bg-[var(--panel-solid)] py-1.5 text-xs font-medium shadow-[0_0_0_1px_rgba(47,125,244,0.24)]"
                           value={(chatDetails ?? selectedRow.chat)?.mode_code ?? 'ai_assist'}
                           onChange={(event) => onChangeChatMode(event.target.value as ChatModeCode, 'mode_selected')}
                         >
                           <option value="full_ai">AI ведёт диалог</option>
-                          <option value="ai_assist">AI помогает</option>
                           <option value="no_ai">Без AI</option>
                         </select>
 
@@ -1918,7 +1912,7 @@ export default function SupportWorkspacePage() {
 
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="soft-surface p-3">
-              <div className="mb-2 text-sm font-medium">Настройки backend</div>
+              <div className="mb-2 text-sm font-medium">Настройки бэкенда</div>
 
               <label className="mb-1 block text-xs text-[var(--muted)]">
                 Режим по умолчанию для новых тикетов
@@ -1929,7 +1923,6 @@ export default function SupportWorkspacePage() {
                 onChange={(event) => setDefaultModeSetting(event.target.value as ChatModeCode)}
               >
                 <option value="full_ai">AI ведёт диалог</option>
-                <option value="ai_assist">AI помогает оператору</option>
                 <option value="no_ai">Без AI</option>
               </select>
 
@@ -1978,7 +1971,7 @@ export default function SupportWorkspacePage() {
               </label>
 
               <div className="mt-2 text-xs text-[var(--muted)]">
-                Эти параметры сохраняются локально и не отправляются в backend.
+                Эти параметры сохраняются локально и не отправляются в бэкенд.
               </div>
             </div>
           </div>
@@ -2071,7 +2064,7 @@ export default function SupportWorkspacePage() {
                   hint={`Эскалация: ${formatPercent(analyticsReport.ai_performance.escalation_rate)}`}
                 />
                 <AnalyticsKpiCard
-                  title="RAG hit rate"
+                  title="Доля попаданий RAG"
                   value={formatPercent(analyticsReport.rag.retrieval.hit_rate)}
                   hint={`Событий: ${formatCompactNumber(analyticsReport.rag.retrieval.events_in_period)}`}
                 />
@@ -2229,7 +2222,7 @@ export default function SupportWorkspacePage() {
 
               {analyticsView === 'knowledge' ? (
                 <div className="grid gap-3 xl:grid-cols-2">
-                  <AnalyticsChartCard title="Ingestion по документам">
+                  <AnalyticsChartCard title="Обработка документов">
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={analyticsIngestionData} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
@@ -2247,7 +2240,7 @@ export default function SupportWorkspacePage() {
                     </div>
                   </AnalyticsChartCard>
 
-                  <AnalyticsChartCard title="RAG состояние">
+                  <AnalyticsChartCard title="Состояние RAG">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <AnalyticsKpiCard title="Документов" value={formatCompactNumber(analyticsReport.rag.total_documents)} />
                       <AnalyticsKpiCard title="Активных документов" value={formatCompactNumber(analyticsReport.rag.active_documents)} />

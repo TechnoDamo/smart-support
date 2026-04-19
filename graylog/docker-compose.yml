@@ -1,5 +1,6 @@
 services:
   mongodb:
+    profiles: ["graylog"]
     image: mongo:6
     container_name: graylog-mongodb
     restart: unless-stopped
@@ -11,6 +12,7 @@ services:
       - graylog
 
   elasticsearch:
+    profiles: ["graylog"]
     image: docker.elastic.co/elasticsearch/elasticsearch:7.17.23
     container_name: graylog-elasticsearch
     restart: unless-stopped
@@ -28,6 +30,7 @@ services:
       - graylog
 
   graylog:
+    profiles: ["graylog"]
     image: graylog/graylog:5.2
     container_name: graylog
     restart: unless-stopped
