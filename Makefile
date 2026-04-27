@@ -59,15 +59,18 @@ ENV_ARGS += LLM_BASE_URL=$${LLM_BASE_URL:-https://api.openai.com/v1}
 ENV_ARGS += EMBEDDING_PROVIDER=openai_compatible
 ENV_ARGS += EMBEDDING_BASE_URL=http://embedding:8000/v1
 else ifeq ($(AI),local-llm)
-# Embedding из .env, LLM жёстко на внутренний llama.cpp-контейнер.
+# Embedding из .env, LLM жёстко на внутренний vLLM-контейнер.
+# LLM_MODEL переключается на локальную модель, чтобы имя совпадало с --served-model-name.
 ENV_ARGS += LLM_PROVIDER=openai_compatible
 ENV_ARGS += LLM_BASE_URL=http://llm:8080/v1
+ENV_ARGS += LLM_MODEL=$${LLM_MODEL_LOCAL:-Qwen/Qwen2.5-0.5B-Instruct}
 ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-openai_compatible}
 ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
 else ifeq ($(AI),local-ai)
 # LLM и embedding жёстко на внутренние контейнеры — полностью автономный стек.
 ENV_ARGS += LLM_PROVIDER=openai_compatible
 ENV_ARGS += LLM_BASE_URL=http://llm:8080/v1
+ENV_ARGS += LLM_MODEL=$${LLM_MODEL_LOCAL:-Qwen/Qwen2.5-0.5B-Instruct}
 ENV_ARGS += EMBEDDING_PROVIDER=openai_compatible
 ENV_ARGS += EMBEDDING_BASE_URL=http://embedding:8000/v1
 else ifeq ($(AI),mock)
@@ -157,41 +160,25 @@ up-graylog:
 
 setup-local-llm:
 	@$(LOAD_ENV) \
-	  models_dir=$${LLM_MODELS_DIR:-./models}; \
-	  mkdir -p "$$models_dir"; \
-	  echo "=== Настройка локального LLM (llama.cpp) ==="; \
+	  storage_dir=$${LLM_MODEL_STORAGE_FOLDER:-./models}; \
+	  model=$${LLM_MODEL_LOCAL:-Qwen/Qwen2.5-0.5B-Instruct}; \
+	  mkdir -p "$$storage_dir"; \
+	  echo "=== Настройка локального LLM (vLLM) ==="; \
 	  echo ""; \
-	  echo "Директория моделей: $$models_dir"; \
+	  echo "Образ vLLM:        $${VLLM_IMAGE:-vllm/vllm-openai:v0.6.3}"; \
+	  echo "Модель:            $$model"; \
+	  echo "Устройство:        $${LLM_DEVICE:-cpu}"; \
+	  echo "Тип данных:        $${LLM_DTYPE:-float32}"; \
+	  echo "Кеш моделей:       $$storage_dir"; \
 	  echo ""; \
-	  if find "$$models_dir" -maxdepth 1 -name "*.gguf" 2>/dev/null | grep -q .; then \
-	    echo "Найдены GGUF-файлы:"; \
-	    find "$$models_dir" -maxdepth 1 -name "*.gguf" -exec ls -lh {} \;; \
-	    echo ""; \
-	    echo "Готово. Укажите путь в .env:"; \
-	    echo "  LLM_MODEL=/models/<имя-файла>.gguf"; \
-	    echo ""; \
-	    echo "Затем запустите стек:"; \
-	    echo "  make up AI=local-llm STORAGE=filesystem"; \
-	  else \
-	    echo "GGUF-файлы не найдены в $$models_dir."; \
-	    echo ""; \
-	    echo "Загрузите модель, например (Qwen2.5-7B, ~4.7 ГБ):"; \
-	    echo ""; \
-	    echo "  # Через wget:"; \
-	    echo "  wget -P $$models_dir \\"; \
-	    echo "    https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf"; \
-	    echo ""; \
-	    echo "  # Или через huggingface-cli:"; \
-	    echo "  pip install huggingface_hub"; \
-	    echo "  huggingface-cli download Qwen/Qwen2.5-7B-Instruct-GGUF \\"; \
-	    echo "    qwen2.5-7b-instruct-q4_k_m.gguf --local-dir $$models_dir"; \
-	    echo ""; \
-	    echo "После загрузки добавьте в .env:"; \
-	    echo "  LLM_MODEL=/models/qwen2.5-7b-instruct-q4_k_m.gguf"; \
-	    echo ""; \
-	    echo "Затем запустите:"; \
-	    echo "  make up AI=local-llm STORAGE=filesystem"; \
-	  fi; \
+	  echo "Модель скачается автоматически при первом запуске из HuggingFace."; \
+	  echo ""; \
+	  echo "Для GPU замените в .env:"; \
+	  echo "  LLM_DEVICE=cuda"; \
+	  echo "  LLM_DTYPE=bfloat16"; \
+	  echo ""; \
+	  echo "Запуск:"; \
+	  echo "  make up AI=local-llm STORAGE=filesystem"; \
 	  echo ""; \
 	  echo "Подробности и мониторинг первого запуска: llm/README.md"
 

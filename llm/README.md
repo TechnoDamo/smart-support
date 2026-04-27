@@ -1,6 +1,6 @@
-# LLM-сервер (llama.cpp)
+# LLM-сервер (vLLM)
 
-Локальный OpenAI-совместимый LLM-сервер на базе [llama.cpp](https://github.com/ggerganov/llama.cpp). Нужен, когда генеративную модель нужно держать on-prem. Backend обращается к нему так же, как к облачному `/v1/chat/completions` — переключение происходит через `LLM_BASE_URL` без изменения кода.
+Локальный OpenAI-совместимый LLM-сервер на базе [vLLM](https://github.com/vllm-project/vllm). Обслуживает HuggingFace-модели и поддерживает как CPU (без GPU), так и NVIDIA GPU. Backend обращается к нему через стандартный `/v1/chat/completions` — переключение происходит через `LLM_BASE_URL` без изменения кода.
 
 Активируется профилями `local-llm` и `local-ai`.
 
@@ -9,13 +9,14 @@
 ## Содержание
 
 - [Быстрый старт](#быстрый-старт)
-- [Шаг 1 — загрузка модели](#шаг-1--загрузка-модели)
-- [Шаг 2 — настройка .env](#шаг-2--настройка-env)
-- [Шаг 3 — запуск](#шаг-3--запуск)
+- [CPU или GPU](#cpu-или-gpu)
+- [Настройка .env](#настройка-env)
+- [Запуск](#запуск)
 - [Первый старт: что происходит внутри](#первый-старт-что-происходит-внутри)
 - [Мониторинг логов](#мониторинг-логов)
 - [Проверка работоспособности](#проверка-работоспособности)
 - [Параметры](#параметры)
+- [Рекомендуемые модели](#рекомендуемые-модели)
 - [Устранение неполадок](#устранение-неполадок)
 
 ---
@@ -23,79 +24,70 @@
 ## Быстрый старт
 
 ```bash
-# Проверить готовность и получить инструкции по загрузке модели:
+# Проверить конфигурацию и получить инструкции:
 make setup-local-llm
 
 # Запустить стек с локальным LLM (облачные embeddings):
 make up AI=local-llm STORAGE=filesystem
 
-# Следить за логами:
-make logs AI=local-llm STORAGE=filesystem
+# Следить за загрузкой модели и стартом сервера:
+docker logs -f smart-support-llm
 ```
 
 ---
 
-## Шаг 1 — загрузка модели
+## CPU или GPU
 
-llama.cpp работает с моделями в формате **GGUF**. Файл нужно положить в директорию, указанную в `LLM_MODELS_DIR` (по умолчанию `./models` в корне репозитория).
-
-### Рекомендуемые модели
-
-| Модель | Размер файла | Параметры | Рекомендуется для |
-|--------|-------------|-----------|-------------------|
-| Qwen2.5-7B-Instruct-Q4_K_M | ~4.7 ГБ | 7B | Основной вариант |
-| Qwen2.5-14B-Instruct-Q4_K_M | ~9 ГБ | 14B | Качество выше, нужно больше RAM |
-| gemma-2-9b-it-Q4_K_M | ~5.5 ГБ | 9B | Альтернатива |
-
-### Загрузка через wget
-
-```bash
-wget -P ./models \
-  https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf
-```
-
-### Загрузка через huggingface-cli
-
-```bash
-pip install huggingface_hub
-
-huggingface-cli download Qwen/Qwen2.5-7B-Instruct-GGUF \
-  qwen2.5-7b-instruct-q4_k_m.gguf \
-  --local-dir ./models
-```
-
-`huggingface-cli` показывает прогресс загрузки в терминале и поддерживает докачку. Если загрузка прервалась — повторите команду.
-
----
-
-## Шаг 2 — настройка .env
+vLLM переключается между CPU и GPU через две переменные в `.env`:
 
 ```env
-# Путь к GGUF-файлу внутри контейнера (/models — это смонтированный LLM_MODELS_DIR):
-LLM_MODEL=/models/qwen2.5-7b-instruct-q4_k_m.gguf
+# CPU-режим (без GPU, работает везде):
+LLM_DEVICE=cpu
+LLM_DTYPE=float32
 
-# Директория с GGUF-файлами на хосте:
-LLM_MODELS_DIR=./models
-
-# Порт, на котором llama.cpp будет доступен с хоста:
-LLM_PORT=8091
-
-# Размер контекста в токенах (чем больше — тем больше RAM):
-LLM_CTX_SIZE=4096
-
-# CPU-режим (0 слоёв на GPU). Для частичного GPU-ускорения увеличьте значение:
-LLM_N_GPU_LAYERS=0
-
-# Число потоков CPU:
-LLM_THREADS=8
+# GPU-режим (NVIDIA, требует nvidia-container-toolkit):
+LLM_DEVICE=cuda
+LLM_DTYPE=bfloat16
 ```
+
+На CPU vLLM работает медленнее, чем на GPU, но вполне пригоден для разработки и умеренной нагрузки. Модель `Qwen/Qwen2.5-0.5B-Instruct` (~1 ГБ) на CPU отвечает за 2-10 секунд на запрос.
 
 ---
 
-## Шаг 3 — запуск
+## Настройка .env
+
+```env
+# Образ vLLM:
+VLLM_IMAGE=vllm/vllm-openai:v0.6.3
+
+# Директория для кеша моделей (HuggingFace скачивает сюда):
+LLM_MODEL_STORAGE_FOLDER=./models
+
+# Порт сервера на хосте:
+LLM_PORT=8091
+
+# Максимальная длина контекста в токенах (меньше = меньше RAM):
+LLM_CTX_SIZE=2048
+
+# Устройство и тип данных:
+LLM_DEVICE=cpu
+LLM_DTYPE=float32
+
+# Объём RAM под KV-кеш (ГБ):
+VLLM_CPU_KVCACHE_SPACE=4
+
+# HuggingFace model ID для локального сервера:
+LLM_MODEL_LOCAL=Qwen/Qwen2.5-0.5B-Instruct
+```
+
+> `LLM_MODEL_LOCAL` и `LLM_MODEL` — разные переменные. `LLM_MODEL` используется для облачного провайдера (`deepseek-chat`, `gpt-4o-mini` и т.п.). При запуске `AI=local-llm` Makefile автоматически подставляет `LLM_MODEL_LOCAL` в качестве имени модели для backend, чтобы оно совпадало с тем, что загрузил vLLM.
+
+---
+
+## Запуск
 
 ```bash
-# Только локальный LLM, облачные embeddings:
+# Локальный LLM + облачные embeddings:
 make up AI=local-llm STORAGE=filesystem
 
 # Полностью локальный стек (LLM + embeddings):
@@ -106,67 +98,81 @@ make up AI=local-ai STORAGE=filesystem
 
 ## Первый старт: что происходит внутри
 
-Первый запуск llama.cpp занимает **от 30 секунд до нескольких минут** в зависимости от размера модели и числа CPU. Вот что происходит последовательно:
-
 ### 1. Загрузка образа Docker
 
-При первом `make up` Docker скачивает образ `ghcr.io/ggerganov/llama.cpp:server` (~1-2 ГБ). Прогресс виден в терминале прямо во время выполнения команды.
+При первом запуске Docker скачивает `vllm/vllm-openai:v0.6.3` (~8-12 ГБ — образ включает CUDA-библиотеки, даже в CPU-режиме). Прогресс виден в терминале во время `make up`.
 
-### 2. Инициализация сервера
+### 2. Загрузка модели из HuggingFace
 
-Сервер читает GGUF-файл и загружает веса модели в оперативную память. В логах это выглядит так:
+После старта контейнера vLLM скачивает модель в `/models` (смонтированный `LLM_MODEL_STORAGE_FOLDER`). При повторных запусках модель берётся из кеша — скачивания не будет.
+
+В логах это выглядит так:
 
 ```
-llm_load_print_meta: model type       = 7B
-llm_load_print_meta: model fsize      = 4.68 GiB
-llm_load_tensors: ggml ctx size =    0.27 MiB
-llm_load_tensors: CPU buffer size =  4794.93 MiB
-...
-llama_new_context_with_model: n_ctx      = 4096
-llama_new_context_with_model: n_batch    = 512
-...
-{"level":"INFO","msg":"HTTP server listening","hostname":"0.0.0.0","port":8080}
+INFO     Downloading shards: 100%|██████████| 1/1 [00:45<00:00]
+INFO     Loading model weights took 0.98 GB
+INFO     Starting to serve on 0.0.0.0:8080.
 ```
 
-Строка `HTTP server listening` означает, что сервер готов принимать запросы.
+### 3. Инициализация движка
 
-### 3. Healthcheck
+vLLM инициализирует KV-кеш и прогревает движок. На CPU это занимает дополнительно 30-60 секунд:
 
-Docker проверяет `/health` каждые 30 секунд. Пока сервер не ответил — контейнер `api` не запустится (`depends_on` в корневом compose это гарантирует, если вы добавите условие).
+```
+INFO     # CPU blocks: 512, ...
+INFO     Warming up model for 1 steps with batch size 256...
+INFO     Application startup complete.
+```
+
+Строка `Application startup complete` означает, что сервер готов принимать запросы.
+
+### Ориентировочное время первого старта
+
+| Ситуация | Время |
+|----------|-------|
+| Первый запуск, скачивание 0.5B модели | 3-10 мин (зависит от сети) |
+| Повторный запуск, модель в кеше | 1-3 мин |
+| GPU-режим, модель в кеше | 20-60 сек |
 
 ---
 
 ## Мониторинг логов
 
-### Следить за запуском llama.cpp в реальном времени
+### Следить за стартом в реальном времени
 
 ```bash
-# Из корня репозитория:
-make logs AI=local-llm STORAGE=filesystem
-
 # Только контейнер LLM:
 docker logs -f smart-support-llm
+
+# Все сервисы стека:
+make logs AI=local-llm STORAGE=filesystem
 ```
 
-### Ключевые строки в логах при старте
+### Ключевые строки в логах
 
 | Что ищем | Значение |
 |----------|----------|
-| `llm_load_print_meta: model type` | Модель начала загружаться |
-| `llm_load_tensors: CPU buffer size` | Веса загружены в RAM (объём виден здесь) |
-| `HTTP server listening` | Сервер готов, можно слать запросы |
-| `slot available` | Свободный слот для обработки запроса |
+| `Downloading shards` | Идёт загрузка модели |
+| `Loading model weights took` | Модель загружена, показан размер |
+| `CPU blocks:` / `GPU blocks:` | KV-кеш выделен |
+| `Warming up model` | Прогрев движка |
+| `Application startup complete` | Сервер готов |
+| `Received request` | Запрос принят и обрабатывается |
 
-### Следить только за запросами (без шума инициализации)
+### Следить только за запросами
 
 ```bash
-docker logs -f smart-support-llm 2>&1 | grep -E "(request|prompt|generated|slot)"
+docker logs -f smart-support-llm 2>&1 | grep -E "(Received|Generated|request)"
 ```
 
-### Проверить потребление ресурсов
+### Мониторинг ресурсов
 
 ```bash
+# CPU и RAM:
 docker stats smart-support-llm
+
+# GPU (если используется):
+watch -n 1 nvidia-smi
 ```
 
 ---
@@ -174,16 +180,19 @@ docker stats smart-support-llm
 ## Проверка работоспособности
 
 ```bash
-# Проверить /health:
+# Healthcheck:
 curl http://localhost:8091/health
 
-# Тестовый запрос к API (после старта):
+# Список загруженных моделей:
+curl http://localhost:8091/v1/models
+
+# Тестовый запрос:
 curl http://localhost:8091/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "local",
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
     "messages": [{"role": "user", "content": "Привет, ты работаешь?"}],
-    "max_tokens": 100
+    "max_tokens": 50
   }'
 ```
 
@@ -191,33 +200,51 @@ curl http://localhost:8091/v1/chat/completions \
 
 ## Параметры
 
-Все параметры задаются в `.env` и автоматически подставляются в команду запуска контейнера.
-
 | Переменная | По умолчанию | Описание |
 |-----------|-------------|----------|
-| `LLM_MODEL` | `/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf` | Путь к GGUF внутри контейнера |
-| `LLM_MODELS_DIR` | `./models` | Директория с GGUF-файлами на хосте |
+| `VLLM_IMAGE` | `vllm/vllm-openai:v0.6.3` | Образ vLLM |
+| `LLM_MODEL_LOCAL` | `Qwen/Qwen2.5-0.5B-Instruct` | HuggingFace model ID |
+| `LLM_MODEL_STORAGE_FOLDER` | `./models` | Кеш моделей на хосте |
 | `LLM_PORT` | `8091` | Внешний порт на хосте |
-| `LLM_CTX_SIZE` | `4096` | Размер контекста в токенах |
-| `LLM_N_GPU_LAYERS` | `0` | Слоёв на GPU (0 = CPU-режим) |
-| `LLM_THREADS` | `8` | Число потоков CPU |
-| `LLM_BATCH` | `512` | Размер батча при обработке |
+| `LLM_CTX_SIZE` | `2048` | Максимальная длина контекста |
+| `LLM_DEVICE` | `cpu` | Устройство: `cpu` или `cuda` |
+| `LLM_DTYPE` | `float32` | Тип данных: `float32` (CPU) / `bfloat16` (GPU) |
+| `VLLM_CPU_KVCACHE_SPACE` | `4` | RAM под KV-кеш в ГБ (только для CPU) |
+| `HUGGING_FACE_HUB_TOKEN` | пусто | Токен для приватных моделей |
+| `HF_ENDPOINT` | `https://huggingface.co` | Источник загрузки моделей |
+
+---
+
+## Рекомендуемые модели
+
+| Модель | RAM (CPU, fp32) | Качество | Назначение |
+|--------|----------------|----------|-----------|
+| `Qwen/Qwen2.5-0.5B-Instruct` | ~2 ГБ | Базовое | Тестирование, разработка |
+| `Qwen/Qwen2.5-1.5B-Instruct` | ~6 ГБ | Хорошее | Лёгкий продакшен |
+| `Qwen/Qwen2.5-7B-Instruct` | ~28 ГБ | Высокое | Основной продакшен (CPU) |
+| `Qwen/Qwen2.5-7B-Instruct` | ~16 ГБ VRAM | Высокое | GPU-продакшен (bfloat16) |
+
+Все модели поддерживают русский язык и JSON-режим, необходимый для AI-оркестратора.
 
 ---
 
 ## Устранение неполадок
 
-**Контейнер сразу падает с ошибкой "model not found"**
-→ Проверьте, что файл `LLM_MODEL` существует внутри контейнера:
-```bash
-docker run --rm -v ./models:/models ghcr.io/ggerganov/llama.cpp:server ls /models
+**Контейнер не стартует: `CUDA error` или `no CUDA devices`**
+→ Вы используете GPU-режим на машине без GPU. Переключитесь на CPU в `.env`:
+```env
+LLM_DEVICE=cpu
+LLM_DTYPE=float32
 ```
 
-**Сервер стартует очень медленно**
-→ Нормально для больших моделей. Модель 7B на CPU загружается ~1-3 мин. Следите за логами — строка `HTTP server listening` означает готовность.
+**`Out of memory` при старте**
+→ Уменьшите `LLM_CTX_SIZE` (например до `1024`) или `VLLM_CPU_KVCACHE_SPACE` (например до `2`). Либо выберите меньшую модель.
 
-**Out of memory при старте**
-→ Уменьшите `LLM_CTX_SIZE` (например до `2048`) или выберите модель меньшего размера (`Q3_K_M` вместо `Q4_K_M`).
+**Backend возвращает `404 model not found`**
+→ Имя модели в запросе не совпадает с загруженной. Убедитесь, что запускаете через `make up` (не напрямую `docker compose`) — Makefile автоматически согласовывает `LLM_MODEL` с `LLM_MODEL_LOCAL`.
 
-**Backend не может подключиться к LLM**
-→ В режиме `AI=local-llm` Makefile автоматически устанавливает `LLM_BASE_URL=http://llm:8080/v1`. Убедитесь, что запускаете через `make up`, а не напрямую через `docker compose`.
+**Загрузка модели зависла**
+→ Проверьте сеть. Для использования зеркала HuggingFace:
+```env
+HF_ENDPOINT=https://hf-mirror.com
+```
