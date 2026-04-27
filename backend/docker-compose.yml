@@ -6,7 +6,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart_support_db}
       PROMPTS_DIR: /app/prompts
     restart: "no"
     depends_on:
@@ -32,7 +32,7 @@ services:
       GRAYLOG_HOST: ${GRAYLOG_HOST:-graylog}
       GRAYLOG_PORT: ${GRAYLOG_PORT:-12201}
       GRAYLOG_PROTOCOL: ${GRAYLOG_PROTOCOL:-tcp}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://smart:smart@postgres:5432/smart_support_db}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_API_KEY: ${LLM_API_KEY:-${OPENAI_API_KEY:-}}
