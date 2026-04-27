@@ -1,4 +1,6 @@
-.PHONY: help up down logs logs-graylog ps config pull restart up-cloud up-local-embedding up-local-llm up-local-ai up-mock up-minio up-graylog
+.PHONY: help up down logs logs-graylog ps config pull restart \
+        up-cloud up-local-embedding up-local-llm up-local-ai up-mock up-minio up-graylog \
+        setup-local-llm setup-local-embedding setup-local-ai
 
 AI ?= cloud
 STORAGE ?= filesystem
@@ -18,7 +20,7 @@ ALL_PROFILE_ARGS := --profile local-ai --profile local-embedding --profile local
 
 ENV_ARGS := VECTOR_STORE_PROVIDER=$${VECTOR_STORE_PROVIDER:-qdrant}
 ENV_ARGS += CHANNEL_TELEGRAM_PROVIDER=$${CHANNEL_TELEGRAM_PROVIDER:-mock}
-ENV_ARGS += DATABASE_URL=postgresql+asyncpg://$${POSTGRES_USER:-smart}:$${POSTGRES_PASSWORD:-smart}@postgres:5432/$${POSTGRES_DB:-smart}
+ENV_ARGS += DATABASE_URL=postgresql+asyncpg://$${POSTGRES_USER:-smart}:$${POSTGRES_PASSWORD:-smart}@postgres:5432/$${POSTGRES_DB:-smart_support_db}
 ENV_ARGS += QDRANT_URL=http://qdrant:6333
 ENV_ARGS += QDRANT_API_KEY=$${QDRANT_API_KEY:-}
 ENV_ARGS += PROMPTS_DIR=/app/prompts
@@ -45,25 +47,29 @@ $(error Unsupported STORAGE=$(STORAGE). Use one of: filesystem, minio)
 endif
 
 ifeq ($(AI),cloud)
+# Облачный провайдер: URL и провайдер берутся из .env (LLM_BASE_URL, EMBEDDING_BASE_URL).
 ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-openai_compatible}
 ENV_ARGS += LLM_BASE_URL=$${LLM_BASE_URL:-https://api.openai.com/v1}
 ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-openai_compatible}
 ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
 else ifeq ($(AI),local-embedding)
+# LLM из .env, embedding жёстко на внутренний TEI-контейнер.
 ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-openai_compatible}
 ENV_ARGS += LLM_BASE_URL=$${LLM_BASE_URL:-https://api.openai.com/v1}
-ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-openai_compatible}
-ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-http://embedding:8000/v1}
+ENV_ARGS += EMBEDDING_PROVIDER=openai_compatible
+ENV_ARGS += EMBEDDING_BASE_URL=http://embedding:8000/v1
 else ifeq ($(AI),local-llm)
-ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-openai_compatible}
-ENV_ARGS += LLM_BASE_URL=$${LLM_BASE_URL:-http://llm:8080/v1}
+# Embedding из .env, LLM жёстко на внутренний llama.cpp-контейнер.
+ENV_ARGS += LLM_PROVIDER=openai_compatible
+ENV_ARGS += LLM_BASE_URL=http://llm:8080/v1
 ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-openai_compatible}
 ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
 else ifeq ($(AI),local-ai)
-ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-openai_compatible}
-ENV_ARGS += LLM_BASE_URL=$${LLM_BASE_URL:-http://llm:8080/v1}
-ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-openai_compatible}
-ENV_ARGS += EMBEDDING_BASE_URL=$${EMBEDDING_BASE_URL:-http://embedding:8000/v1}
+# LLM и embedding жёстко на внутренние контейнеры — полностью автономный стек.
+ENV_ARGS += LLM_PROVIDER=openai_compatible
+ENV_ARGS += LLM_BASE_URL=http://llm:8080/v1
+ENV_ARGS += EMBEDDING_PROVIDER=openai_compatible
+ENV_ARGS += EMBEDDING_BASE_URL=http://embedding:8000/v1
 else ifeq ($(AI),mock)
 ENV_ARGS += LLM_PROVIDER=$${LLM_PROVIDER:-mock}
 ENV_ARGS += EMBEDDING_PROVIDER=$${EMBEDDING_PROVIDER:-mock}
@@ -76,28 +82,33 @@ help:
 	@echo "Корневые команды Smart Support:"
 	@echo "  make up AI=cloud STORAGE=filesystem      — backend + postgres + qdrant + локальные файлы"
 	@echo "  make up AI=cloud STORAGE=minio           — backend + postgres + qdrant + MinIO"
-	@echo "  make up AI=local-embedding STORAGE=minio — локальный vLLM + MinIO"
+	@echo "  make up AI=local-embedding STORAGE=minio — локальный TEI embedding + MinIO"
 	@echo "  make up AI=local-llm STORAGE=minio       — локальный llama.cpp + MinIO"
-	@echo "  make up AI=local-ai STORAGE=minio        — локальные llama.cpp + vLLM + MinIO"
+	@echo "  make up AI=local-ai STORAGE=minio        — локальные llama.cpp + TEI + MinIO"
 	@echo "  make up AI=mock STORAGE=filesystem       — backend на mock-провайдерах"
 	@echo "  make up ... GRAYLOG=true                 — дополнительно поднять Graylog"
 	@echo "  make down                                — остановить весь стек"
-	@echo "  make logs                                — поток логов всех сервисов"
+	@echo "  make logs AI=... STORAGE=...             — поток логов всех сервисов"
 	@echo "  make logs-graylog                        — поток логов Graylog/Mongo/Elasticsearch"
-	@echo "  make ps                                  — список контейнеров"
-	@echo "  make config AI=... STORAGE=...           — показать итоговую конфигурацию"
+	@echo "  make ps AI=... STORAGE=...               — список контейнеров"
+	@echo "  make config AI=... STORAGE=...           — итоговый docker-compose (для отладки)"
+	@echo ""
+	@echo "Настройка локальных сервисов (перед первым запуском):"
+	@echo "  make setup-local-llm                     — проверка и инструкции по загрузке GGUF-модели"
+	@echo "  make setup-local-embedding               — проверка и инструкции по настройке TEI"
+	@echo "  make setup-local-ai                      — оба сервиса сразу"
 	@echo ""
 	@echo "Параметры AI: cloud | local-embedding | local-llm | local-ai | mock"
 	@echo "Параметры STORAGE: filesystem | minio"
 	@echo "Параметры GRAYLOG: false | true"
 	@echo ""
-	@echo "Частые параметры:"
-	@echo "  OPENAI_API_KEY=...                       — если AI идёт во внешний OpenAI-совместимый сервис"
-	@echo "  LLM_MODEL=/models/model.gguf            — если запускается local-llm/local-ai"
-	@echo "  EMBEDDING_MODEL=BAAI/bge-m3             — если запускается local-embedding/local-ai"
-	@echo "  EMBEDDING_VECTOR_SIZE=1024              — должен совпадать с embedding-моделью"
-	@echo "  MINIO_ROOT_USER=smart                   — логин локального object storage"
-	@echo "  MINIO_ROOT_PASSWORD=smartminio123       — пароль локального object storage"
+	@echo "Ключевые переменные .env:"
+	@echo "  LLM_BASE_URL, LLM_API_KEY, LLM_MODEL    — облачный LLM-провайдер"
+	@echo "  LLM_MODEL=/models/model.gguf            — путь к GGUF для local-llm/local-ai"
+	@echo "  EMBEDDING_MODEL=..., EMBEDDING_VECTOR_SIZE=... — модель и размерность"
+	@echo "  TEI_IMAGE=...                           — образ TEI (cpu-1.5 / turing-1.5 / 89-1.5)"
+	@echo ""
+	@echo "Подробности: llm/README.md, embedding/README.md"
 
 up:
 	@$(LOAD_ENV) env $(ENV_ARGS) $(COMPOSE) -f $(COMPOSE_FILE) $(PROFILE_ARGS) up -d --build
@@ -143,3 +154,73 @@ up-minio:
 
 up-graylog:
 	@$(MAKE) up GRAYLOG=true
+
+setup-local-llm:
+	@$(LOAD_ENV) \
+	  models_dir=$${LLM_MODELS_DIR:-./models}; \
+	  mkdir -p "$$models_dir"; \
+	  echo "=== Настройка локального LLM (llama.cpp) ==="; \
+	  echo ""; \
+	  echo "Директория моделей: $$models_dir"; \
+	  echo ""; \
+	  if ls "$$models_dir"/*.gguf 2>/dev/null | head -1 > /dev/null; then \
+	    echo "Найдены GGUF-файлы:"; \
+	    ls -lh "$$models_dir"/*.gguf; \
+	    echo ""; \
+	    echo "Готово. Укажите путь в .env:"; \
+	    echo "  LLM_MODEL=/models/<имя-файла>.gguf"; \
+	    echo ""; \
+	    echo "Затем запустите стек:"; \
+	    echo "  make up AI=local-llm STORAGE=filesystem"; \
+	  else \
+	    echo "GGUF-файлы не найдены в $$models_dir."; \
+	    echo ""; \
+	    echo "Загрузите модель, например (Qwen2.5-7B, ~4.7 ГБ):"; \
+	    echo ""; \
+	    echo "  # Через wget:"; \
+	    echo "  wget -P $$models_dir \\"; \
+	    echo "    https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf"; \
+	    echo ""; \
+	    echo "  # Или через huggingface-cli:"; \
+	    echo "  pip install huggingface_hub"; \
+	    echo "  huggingface-cli download Qwen/Qwen2.5-7B-Instruct-GGUF \\"; \
+	    echo "    qwen2.5-7b-instruct-q4_k_m.gguf --local-dir $$models_dir"; \
+	    echo ""; \
+	    echo "После загрузки добавьте в .env:"; \
+	    echo "  LLM_MODEL=/models/qwen2.5-7b-instruct-q4_k_m.gguf"; \
+	    echo ""; \
+	    echo "Затем запустите:"; \
+	    echo "  make up AI=local-llm STORAGE=filesystem"; \
+	  fi; \
+	  echo ""; \
+	  echo "Подробности и мониторинг первого запуска: llm/README.md"
+
+setup-local-embedding:
+	@$(LOAD_ENV) \
+	  cache_dir=$${EMBEDDING_MODEL_STORAGE_FOLDER:-.data}; \
+	  mkdir -p "embedding/$$cache_dir"; \
+	  echo "=== Настройка локального Embedding (TEI) ==="; \
+	  echo ""; \
+	  echo "Модель:         $${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}"; \
+	  echo "Образ TEI:      $${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.5}"; \
+	  echo "Кеш моделей:    embedding/$$cache_dir"; \
+	  echo ""; \
+	  echo "Модель загружается автоматически при первом запуске с HuggingFace."; \
+	  echo ""; \
+	  echo "Выбор образа TEI (.env → TEI_IMAGE):"; \
+	  echo "  CPU:             ghcr.io/huggingface/text-embeddings-inference:cpu-1.5"; \
+	  echo "  GPU (T4):        ghcr.io/huggingface/text-embeddings-inference:turing-1.5"; \
+	  echo "  GPU (A100/H100): ghcr.io/huggingface/text-embeddings-inference:89-1.5"; \
+	  echo ""; \
+	  echo "Для GPU нужен nvidia-container-toolkit:"; \
+	  echo "  https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html"; \
+	  echo ""; \
+	  echo "Запуск:"; \
+	  echo "  make up AI=local-embedding STORAGE=filesystem"; \
+	  echo ""; \
+	  echo "Подробности и мониторинг загрузки модели: embedding/README.md"
+
+setup-local-ai:
+	@$(MAKE) setup-local-llm
+	@echo ""
+	@$(MAKE) setup-local-embedding
