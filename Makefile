@@ -163,9 +163,9 @@ setup-local-llm:
 	  echo ""; \
 	  echo "Директория моделей: $$models_dir"; \
 	  echo ""; \
-	  if ls "$$models_dir"/*.gguf 2>/dev/null | head -1 > /dev/null; then \
+	  if find "$$models_dir" -maxdepth 1 -name "*.gguf" 2>/dev/null | grep -q .; then \
 	    echo "Найдены GGUF-файлы:"; \
-	    ls -lh "$$models_dir"/*.gguf; \
+	    find "$$models_dir" -maxdepth 1 -name "*.gguf" -exec ls -lh {} \;; \
 	    echo ""; \
 	    echo "Готово. Укажите путь в .env:"; \
 	    echo "  LLM_MODEL=/models/<имя-файла>.gguf"; \
