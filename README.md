@@ -1,188 +1,178 @@
 # Smart Support
 
-![Архитектура системы](docs/architecture.png)
+Smart Support — Docker Compose стек для автоматизации поддержки: PostgreSQL,
+Qdrant, объектное хранилище, локальные GPU AI-сервисы и опциональный Graylog.
 
-Система поддержки с AI-оператором, гибридным RAG и единым бэкофисом для живых операторов. Один монорепозиторий, один `.env`, одна команда `make up` — и у вас поднят весь стек: API, фронт оператора, Postgres, Qdrant, object storage и (по желанию) локальные LLM/embedding-сервера и Graylog.
+Корневой `Makefile` — единая точка запуска. У каждой внешней зависимости есть
+отдельный флаг деплоя:
 
-> Всё настраивается через переменные. Хотите облачный OpenAI-совместимый провайдер — поднимайте `AI=cloud`. Нужен полностью автономный on-prem — `AI=local-ai`. Нужен только MinIO без локальных моделей — `AI=cloud STORAGE=minio`. Нужен централизованный лог — добавьте `GRAYLOG=true`.
+| Флаг | Значения | По умолчанию | Что означает |
+| --- | --- | --- | --- |
+| `LLM` | `local`, `cloud` | `local` | `local` поднимает vLLM на CUDA; `cloud` использует OpenAI-compatible API из `.env`. |
+| `EMBEDDING` | `local`, `cloud` | `local` | `local` поднимает TEI на CUDA; `cloud` использует OpenAI-compatible API из `.env`. |
+| `POSTGRES` | `local`, `cloud` | `local` | `local` поднимает PostgreSQL; `cloud` использует `DATABASE_URL`. |
+| `QDRANT` | `local`, `cloud` | `local` | `local` поднимает Qdrant; `cloud` использует `QDRANT_URL` и `QDRANT_API_KEY`. |
+| `OBJECT_STORAGE` | `filesystem`, `local`, `cloud` | `filesystem` | `filesystem` пишет в `./storage`; `local` поднимает MinIO; `cloud` использует S3-переменные из `.env`. |
+| `GRAYLOG` | `local`, `false` | `false` | `local` поднимает Graylog, Mongo и Elasticsearch. |
 
-## Содержание
+## Быстрый запуск на GPU-сервере
 
-- [Из чего состоит](#из-чего-состоит)
-- [Как это работает](#как-это-работает)
-- [Быстрый старт](#быстрый-старт)
-- [Сценарии запуска](#сценарии-запуска)
-- [Graylog: централизованное логирование](#graylog-централизованное-логирование)
-- [Управление стеком](#управление-стеком)
-- [Конфигурация через .env](#конфигурация-через-env)
-- [Где искать детали](#где-искать-детали)
-
-## Из чего состоит
-
-| Компонент | Назначение | Путь |
-|-----------|-----------|------|
-| **backend** | FastAPI API, AI-оркестратор, RAG, outbox, планировщик | [`backend/`](backend/) |
-| **frontend-support** | Next.js UI оператора: Inbox / Knowledge Base / Settings | [`frontend-support/`](frontend-support/) |
-| **postgres** | Реляционные данные (чаты, тикеты, документы, outbox). Схема в `schema.dbml` | [`postgres/`](postgres/) |
-| **qdrant** | Векторное хранилище для dense + sparse retrieval | [`qdrant/`](qdrant/) |
-| **minio** | Локальное S3-совместимое object storage | [`minio/`](minio/) |
-| **embedding** | Локальный OpenAI-совместимый embedding-сервер на vLLM | [`embedding/`](embedding/) |
-| **llm** | Локальный OpenAI-совместимый LLM-сервер на llama.cpp | [`llm/`](llm/) |
-| **graylog** | Централизованное логирование + веб-интерфейс | [`graylog/`](graylog/) |
-| **docker-compose.yml** | Корневой orchestrator через `include:` всех подпроектов | корень |
-| **Makefile** | Единая точка запуска с переключателями `AI` / `STORAGE` / `GRAYLOG` | корень |
-
-## Как это работает
-
-Схема потоков данных — в картинке в начале README. По шагам:
-
-1. **Входящее сообщение** → backend создаёт/обновляет тикет и кладёт задачу в AI-оркестратор.
-2. **Гибридный RAG** достаёт релевантные куски из базы знаний: dense-эмбеддинги + BM25 sparse, ранжирование через Reciprocal Rank Fusion (k=60).
-3. **AI-оркестратор** решает: отвечает сам (`full_ai`), подсказывает оператору (`ai_assist`) или эскалирует (`pending_human`).
-4. **Outbox** гарантирует доставку ответов в канал (Telegram etc.) даже после падения процесса.
-5. **Frontend** опрашивает API и показывает оператору диалог, подсказки и RAG-контекст.
-
-## Быстрый старт
-
-**Требования:** Docker + Docker Compose, Make, Node 22 LTS (для локального фронта), свободные порты `8081, 3000, 5432, 6333, 9000, 9001` (и `19000, 12201` если нужен Graylog).
+Подключиться к серверу:
 
 ```bash
-# 1. Скопируйте единый .env
+ssh root@vm-5735.user-project-2032.cloud.intcld.ru
+```
+
+Первый чистый деплой через Git:
+
+```bash
+ssh root@vm-5735.user-project-2032.cloud.intcld.ru
+cd /root
+git clone <repo-url> smart-support
+cd smart-support
 cp .env.example .env
-
-# 2. Поднимите стек на моках (без внешних ключей) — для первого запуска
-make up AI=mock STORAGE=filesystem
-
-# 3. Откройте Swagger и фронт
-open http://localhost:8081/docs
-cd frontend-support && nvm use && npm install && npm run dev
+make ai-deployment-tools-setup
+make download-llm-model
+make download-embedding-model
+make up
 ```
 
-По умолчанию всё работает на моках, поэтому OpenAI-ключ, Qdrant и Telegram для первого запуска не нужны. Как только захочется реального AI — поднимайте один из сценариев ниже.
-
-## Сценарии запуска
-
-Общая форма:
+Обычное обновление уже склонированного репозитория:
 
 ```bash
-make up AI=<режим> STORAGE=<режим> [GRAYLOG=true] [ПЕРЕМЕННЫЕ=...]
+ssh root@vm-5735.user-project-2032.cloud.intcld.ru
+cd /root/smart-support
+git pull
+make download-llm-model
+make download-embedding-model
+make up
 ```
 
-| `AI=` | `STORAGE=` | Что поднимается | Когда использовать |
-|-------|-----------|-----------------|--------------------|
-| `cloud` | `filesystem` | backend + postgres + qdrant, AI во внешний OpenAI-совместимый API | dev, быстрый старт, нет S3 |
-| `cloud` | `minio` | + MinIO | dev-прод близко, нужен S3 |
-| `local-embedding` | `minio` | + vLLM для эмбеддингов | экономим на embedding-счетах |
-| `local-llm` | `minio` | + llama.cpp для LLM | экономим на LLM-счетах |
-| `local-ai` | `minio` | полностью автономный стек | on-prem / эксперименты |
-| `mock` | `filesystem` | чистые моки, без внешних вызовов | тесты, CI, первый запуск |
-
-Примеры:
+Для отправки локальной незакоммиченной рабочей копии используйте `rsync`.
+Команда ниже не отправляет модели, `.env`, Git-метаданные и локальные runtime
+папки, но отправляет `.env.example`:
 
 ```bash
-# Облачный OpenAI + локальные файлы
-make up AI=cloud STORAGE=filesystem OPENAI_API_KEY=sk-...
-
-# Облачный OpenAI + MinIO
-make up AI=cloud STORAGE=minio OPENAI_API_KEY=sk-...
-
-# Локальный embedding, облачный LLM
-make up AI=local-embedding STORAGE=minio OPENAI_API_KEY=sk-... \
-  EMBEDDING_MODEL=BAAI/bge-m3 \
-  EMBEDDING_VECTOR_SIZE=1024
-
-# Локальный LLM, облачный embedding
-make up AI=local-llm STORAGE=minio OPENAI_API_KEY=sk-... \
-  LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-
-# Полностью локальный AI
-make up AI=local-ai STORAGE=minio \
-  LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-  EMBEDDING_MODEL=BAAI/bge-m3 \
-  EMBEDDING_VECTOR_SIZE=1024
-
-# Моки для тестов
-make up AI=mock STORAGE=filesystem
+rsync -avz --progress \
+  --exclude 'models/' \
+  --exclude '.*/' \
+  --exclude '.env' \
+  --exclude 'node_modules/' \
+  --exclude '__pycache__/' \
+  --exclude '*.log' \
+  --exclude 'backend/storage/' \
+  --exclude 'graylog/elasticsearch_data/' \
+  --exclude 'graylog/mongodb_data/' \
+  --exclude 'graylog/graylog_data/' \
+  --exclude 'graylog/graylog_journal/' \
+  ./ root@vm-5735.user-project-2032.cloud.intcld.ru:/root/smart-support/
 ```
 
-Что конкретно означают значения `AI=`, `STORAGE=` и какие переменные они переопределяют — смотрите в [Makefile](Makefile).
-
-## Graylog: централизованное логирование
-
-Опциональный слой. Добавляет Graylog 5.2 + Elasticsearch 7.17 + MongoDB 6 и автоматически создаёт GELF TCP input, в который backend отправляет структурированные JSON-логи.
+После `rsync` на сервере:
 
 ```bash
-# Поднять весь стек вместе с Graylog
-make up AI=cloud STORAGE=minio GRAYLOG=true
+cd /root/smart-support
+cp -n .env.example .env
+make ai-deployment-tools-setup
+make download-llm-model
+make download-embedding-model
+make up
+```
 
-# Смотреть только логи Graylog / Elasticsearch / Mongo
+Дефолтный `make up` поднимает локальные PostgreSQL, Qdrant, vLLM, TEI и backend
+с файловым объектным хранилищем.
+
+## Частые сценарии запуска
+
+Полностью локальный GPU-стек с файловым хранилищем:
+
+```bash
+make up
+```
+
+MinIO вместо файлового хранилища:
+
+```bash
+make up OBJECT_STORAGE=local
+```
+
+Облачные LLM и embedding API, но локальные PostgreSQL и Qdrant:
+
+```bash
+make up LLM=cloud EMBEDDING=cloud
+```
+
+Облачная инфраструктура и облачные AI API:
+
+```bash
+make up \
+  LLM=cloud \
+  EMBEDDING=cloud \
+  POSTGRES=cloud \
+  QDRANT=cloud \
+  OBJECT_STORAGE=cloud
+```
+
+Включить Graylog:
+
+```bash
+make up GRAYLOG=local
 make logs-graylog
 ```
 
-После старта:
-
-- Web UI: <http://localhost:19000>
-- Логин: `admin`
-- Пароль: `admin` (меняется через `GRAYLOG_ADMIN_PASSWORD` в `.env`)
-- Input `Smart Support Backend GELF TCP` на порту `12201` создаётся автоматически контейнером `smart-support-graylog-init`.
-
-Подробности, готовые запросы и устранение неполадок — в [graylog/README.md](graylog/README.md).
-
-## Управление стеком
+## Команды Make
 
 ```bash
-make up AI=... STORAGE=... [GRAYLOG=true]   # поднять стек
-make down                                    # остановить всё (с любыми профилями)
-make restart AI=... STORAGE=...              # пересобрать и перезапустить
-make logs AI=... STORAGE=...                 # поток логов всех сервисов
-make logs-graylog                            # поток логов Graylog / Mongo / ES
-make ps AI=... STORAGE=...                   # список контейнеров
-make config AI=... STORAGE=...               # итоговый docker-compose (для отладки)
-make pull AI=... STORAGE=...                 # обновить образы
-make help                                    # шпаргалка по командам
+make help
+make up
+make down
+make logs
+make ps
+make config
+make pull
+make restart
+make ai-deployment-tools-setup
+make download-llm-model
+make download-embedding-model
 ```
 
-Короткие алиасы: `make up-cloud`, `make up-local-ai`, `make up-mock`, `make up-minio`, `make up-graylog`.
+Отдельные сервисы тоже имеют свои команды:
 
-## Конфигурация через .env
-
-`.env` в корне — единый источник правды. Его читают:
-
-- корневой `make up ...`;
-- локальный backend, если запускать его без Docker из `backend/`;
-- все docker-compose сервисы.
-
-Файл разбит на блоки:
-
-- **Инфраструктура** — Postgres / Qdrant / MinIO (логины, порты).
-- **Основные параметры backend** — `APP_ENV`, `APP_HOST`, `APP_PORT`, `LOG_LEVEL`, `LOG_FORMAT`, CORS.
-- **Graylog** — `GRAYLOG_ENABLED`, хост, порт, протокол, `GRAYLOG_ADMIN_PASSWORD`.
-- **База данных** — `DATABASE_URL` (Postgres или SQLite).
-- **LLM провайдер** — `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL` и т.п.
-- **Embeddings провайдер** — симметрично LLM.
-- **Векторное хранилище** — Qdrant / mock.
-- **Object storage** — локальный путь или S3/MinIO.
-- **Telegram** — токен, polling-интервалы.
-- **Поведение** — таймауты тикетов, outbox, RAG-параметры (top-k, размер чанка, веса dense/sparse).
-- **Локальный embedding (vLLM)** и **локальный LLM (llama.cpp)** — параметры для `AI=local-*`.
-
-Полный шаблон с комментариями — в [`.env.example`](.env.example).
-
-Для локального запуска backend вне Docker достаточно:
 ```bash
-GRAYLOG_HOST=localhost            # вместо graylog
-DATABASE_URL=postgresql+asyncpg://smart:smart@localhost:5432/smart
-# или sqlite+aiosqlite:///./smart_support.db — если не нужен Postgres
+make -C llm help
+make -C embedding help
+make -C minio help
 ```
 
-## Где искать детали
+## Порты
 
-- [backend/README.md](backend/README.md) — uv, миграции Alembic, структура API, тесты.
-- [frontend-support/README.md](frontend-support/README.md) — Next.js, Node 22 LTS, переменные фронта.
-- [postgres/README.md](postgres/README.md) — Postgres + DBML-схема.
-- [qdrant/README.md](qdrant/README.md) — Qdrant, коллекции, dense + sparse.
-- [minio/README.md](minio/README.md) — локальное S3 на MinIO.
-- [embedding/README.md](embedding/README.md) — vLLM embedding server.
-- [llm/README.md](llm/README.md) — llama.cpp LLM server.
-- [graylog/README.md](graylog/README.md) — Graylog + Elasticsearch + Mongo.
-- [docs/](docs/) — более глубокие документы по архитектуре, RAG и retrieval.
+| Сервис | URL |
+| --- | --- |
+| Backend API | `http://localhost:8081` |
+| vLLM | `http://localhost:8091/v1` |
+| TEI embeddings | `http://localhost:8090/v1` |
+| Qdrant | `http://localhost:6333` |
+| MinIO API | `http://localhost:9000` |
+| MinIO console | `http://localhost:9001` |
+| Graylog | `http://localhost:19000` |
+
+## Настройки
+
+- Локальный LLM работает только через vLLM на CUDA. Snapshot модели скачивается
+  командой `make download-llm-model`.
+- Локальные embeddings работают только через TEI на CUDA. Snapshot модели
+  скачивается командой `make download-embedding-model`.
+- Оба сервиса используют общий корневой кеш `models/`: из папок `llm/` и
+  `embedding/` он монтируется как `../models`.
+- Для cloud-режима заполните нужные переменные в `.env`: `LLM_BASE_URL`,
+  `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`,
+  `EMBEDDING_MODEL`, `DATABASE_URL`, `QDRANT_URL` и S3-переменные.
+
+Документация по сервисам:
+
+- [llm/README.md](llm/README.md)
+- [embedding/README.md](embedding/README.md)
+- [minio/README.md](minio/README.md)
+- [postgres/README.md](postgres/README.md)
+- [qdrant/README.md](qdrant/README.md)
+- [graylog/README.md](graylog/README.md)

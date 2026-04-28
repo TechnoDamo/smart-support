@@ -1,236 +1,98 @@
-# Embedding-сервер (TEI)
+# Локальные embeddings
 
-Локальный OpenAI-совместимый сервер эмбеддингов на базе [Text Embeddings Inference (TEI)](https://github.com/huggingface/text-embeddings-inference) от HuggingFace. Нужен, когда эмбеддинги не хочется отдавать в облако. Backend вызывает `/v1/embeddings` так же, как облачный OpenAI-совместимый API.
+`embedding/` поднимает OpenAI-compatible embedding-сервер через Hugging Face TEI
+на NVIDIA CUDA. Локальный деплой подразумевает GPU-хост.
 
-Активируется профилями `local-embedding` и `local-ai`.
+## Настройка
 
----
-
-## Содержание
-
-- [Быстрый старт](#быстрый-старт)
-- [Шаг 1 — выбор образа (CPU или GPU)](#шаг-1--выбор-образа-cpu-или-gpu)
-- [Шаг 2 — настройка .env](#шаг-2--настройка-env)
-- [Шаг 3 — запуск](#шаг-3--запуск)
-- [Первый старт: что происходит внутри](#первый-старт-что-происходит-внутри)
-- [Мониторинг загрузки модели](#мониторинг-загрузки-модели)
-- [Проверка работоспособности](#проверка-работоспособности)
-- [Параметры](#параметры)
-- [Устранение неполадок](#устранение-неполадок)
-
----
-
-## Быстрый старт
+Из корня репозитория:
 
 ```bash
-# Проверить готовность и получить инструкции:
-make setup-local-embedding
-
-# Запустить стек с локальными embeddings (облачный LLM):
-make up AI=local-embedding STORAGE=filesystem
-
-# Следить за загрузкой модели:
-docker logs -f smart-support-embedding
+make ai-deployment-tools-setup
+make download-embedding-model
+make up EMBEDDING=local
 ```
 
----
-
-## Шаг 1 — выбор образа (CPU или GPU)
-
-TEI распространяется в отдельных образах для CPU и разных поколений GPU. Выбор — через переменную `TEI_IMAGE` в `.env`.
-
-### CPU (без GPU)
-
-Работает на любом хосте. Медленнее GPU в 5-20 раз, но приемлемо для небольших нагрузок и разработки.
-
-```env
-TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
-```
-
-### GPU NVIDIA (рекомендуется для продакшена)
-
-Требует установленного [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
-
-```env
-# Turing / Ampere (T4, A10, RTX 30xx):
-TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:turing-1.5
-
-# Hopper / Ampere High-End (A100, H100, RTX 40xx):
-TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:89-1.5
-```
-
-Проверить поколение GPU:
-```bash
-nvidia-smi --query-gpu=name,compute_cap --format=csv
-```
-
----
-
-## Шаг 2 — настройка .env
-
-```env
-# Образ TEI (см. выше):
-TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
-
-# HuggingFace-имя модели:
-EMBEDDING_MODEL=minishlab/potion-base-32M
-
-# Размерность выходных векторов — ОБЯЗАТЕЛЬНО совпадает с моделью:
-EMBEDDING_VECTOR_SIZE=256
-
-# Локальная папка для кеша скачанных моделей (относительно папки embedding/):
-EMBEDDING_MODEL_STORAGE_FOLDER=.data
-
-# Внешний порт TEI на хосте:
-EMBEDDING_PORT=8090
-
-# Токен HuggingFace (нужен только для приватных моделей):
-HUGGING_FACE_HUB_TOKEN=
-
-# Источник загрузки моделей:
-HF_ENDPOINT=https://huggingface.co
-```
-
-> **Важно:** если сменили модель — обязательно обновите `EMBEDDING_VECTOR_SIZE` и переиндексируйте коллекцию в Qdrant. Qdrant создаёт коллекцию с фиксированной размерностью при первом старте и не пересоздаёт её автоматически.
-
----
-
-## Шаг 3 — запуск
+Или отдельно:
 
 ```bash
-# Локальные embeddings, облачный LLM:
-make up AI=local-embedding STORAGE=filesystem
-
-# Полностью локальный стек:
-make up AI=local-ai STORAGE=filesystem
+cd embedding
+make download-model
+make up
+make health
 ```
 
----
+## Кеш модели
 
-## Первый старт: что происходит внутри
+Snapshot модели скачивается в:
 
-### 1. Загрузка образа Docker
-
-При первом `make up` Docker скачивает образ TEI. CPU-образ весит ~2-4 ГБ, GPU-образ — ~6-10 ГБ. Прогресс виден прямо в терминале.
-
-### 2. Загрузка модели из HuggingFace
-
-TEI скачивает модель автоматически при первом запуске контейнера. Файлы кешируются в папку `embedding/.data` (или `EMBEDDING_MODEL_STORAGE_FOLDER`). При повторных запусках загрузки не происходит — используется кеш.
-
-Что видно в логах во время загрузки:
-
-```
-Downloading files: 100%|██████████| 5/5 [00:12<00:00, 2.40s/file]
-Loading model...
-Starting HTTP server on 0.0.0.0:8000
+```text
+${EMBEDDING_MODELS_DIR}/${EMBEDDING_MODEL_LOCAL}
 ```
 
-### 3. Готовность
+Значения по умолчанию:
 
-Сервер готов принимать запросы, когда в логах появится:
+```text
+EMBEDDING_MODELS_DIR=../models
+EMBEDDING_MODEL_LOCAL=bge-small-en-v1.5
+EMBEDDING_MODEL_SOURCE=BAAI/bge-small-en-v1.5
+EMBEDDING_VECTOR_SIZE=384
 ```
-{"timestamp":"...","level":"INFO","message":"Ready"}
+
+При запуске из корневого стека backend получает:
+
+```text
+EMBEDDING_PROVIDER=openai_compatible
+EMBEDDING_BASE_URL=http://embedding:8000/v1
+EMBEDDING_MODEL=${EMBEDDING_MODEL_LOCAL}
 ```
 
-Healthcheck (`/health`) начинает отвечать `200 OK`. До этого момента контейнер `api` ждёт.
+Снаружи TEI доступен по адресу:
 
----
+```text
+http://localhost:8090/v1
+```
 
-## Мониторинг загрузки модели
-
-### Следить за прогрессом в реальном времени
+## Команды
 
 ```bash
-# Только контейнер embedding:
-docker logs -f smart-support-embedding
-
-# Все сервисы стека:
-make logs AI=local-embedding STORAGE=filesystem
+make help
+make download-model
+make check-model
+make up
+make health
+make logs
+make down
 ```
 
-### Ключевые строки в логах
+## Основные переменные
 
-| Что ищем | Значение |
-|----------|----------|
-| `Downloading files: X%` | Идёт загрузка модели с HuggingFace |
-| `Loading model...` | Модель загружена, инициализация |
-| `Ready` | Сервер принимает запросы |
-| `inference request` | Запрос обработан успешно |
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `EMBEDDING_MODELS_DIR` | `../models` | Общий кеш моделей на хосте |
+| `EMBEDDING_MODEL_LOCAL` | `bge-small-en-v1.5` | Имя папки модели в общем кеше |
+| `EMBEDDING_MODEL_SOURCE` | `BAAI/bge-small-en-v1.5` | Hugging Face source для `make download-model` |
+| `EMBEDDING_VECTOR_SIZE` | `384` | Размерность векторов для backend и Qdrant |
+| `EMBEDDING_PORT` | `8090` | Порт TEI на хосте |
+| `TEI_IMAGE` | `ghcr.io/huggingface/text-embeddings-inference:86-1.5` | Docker image TEI |
 
-### Проверить, что модель закешировалась
+Подсказки по TEI image:
 
-```bash
-ls -lh embedding/.data/
-# Должны появиться .safetensors или .bin файлы
-```
+| GPU | Image |
+| --- | --- |
+| RTX 3090 / Ampere | `ghcr.io/huggingface/text-embeddings-inference:86-1.5` |
+| T4 / Turing | `ghcr.io/huggingface/text-embeddings-inference:turing-1.5` |
 
-### Мониторинг потребления ресурсов
-
-```bash
-# CPU/RAM:
-docker stats smart-support-embedding
-
-# GPU (если используется):
-watch -n 1 nvidia-smi
-```
-
----
-
-## Проверка работоспособности
+## Проверка
 
 ```bash
-# Проверить /health:
-curl http://localhost:8090/health
-
-# Тестовый запрос на эмбеддинг:
-curl http://localhost:8090/v1/embeddings \
-  -H "Content-Type: application/json" \
+curl -s http://localhost:8090/v1/embeddings \
+  -H 'Content-Type: application/json' \
   -d '{
-    "model": "minishlab/potion-base-32M",
-    "input": "Тестовый запрос для проверки эмбеддинга"
+    "model": "bge-small-en-v1.5",
+    "input": "hello"
   }'
 ```
 
-Ожидаемый ответ — JSON с полем `data[0].embedding` длиной, совпадающей с `EMBEDDING_VECTOR_SIZE`.
-
----
-
-## Параметры
-
-| Переменная | По умолчанию | Описание |
-|-----------|-------------|----------|
-| `TEI_IMAGE` | `...cpu-1.5` | Образ TEI (CPU или GPU-версия) |
-| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace-имя модели |
-| `EMBEDDING_VECTOR_SIZE` | `1536` | Размерность векторов |
-| `EMBEDDING_MODEL_STORAGE_FOLDER` | `.data` | Кеш моделей (относительно `embedding/`) |
-| `EMBEDDING_PORT` | `8090` | Внешний порт на хосте |
-| `HUGGING_FACE_HUB_TOKEN` | пусто | Токен для приватных моделей |
-| `HF_ENDPOINT` | `https://huggingface.co` | Источник загрузки |
-| `DOCKER_PLATFORM` | `linux/amd64` | Платформа контейнера |
-
----
-
-## Устранение неполадок
-
-**Загрузка модели зависла**
-→ Проверьте сетевое соединение. Если HuggingFace недоступен, можно использовать зеркало:
-```env
-HF_ENDPOINT=https://hf-mirror.com
-```
-
-**Ошибка `model not supported`**
-→ Не все модели поддерживаются TEI. TEI работает только с моделями типа BERT/RoBERTa и их производными (dense embedding). Проверьте поддержку на [странице TEI](https://github.com/huggingface/text-embeddings-inference#supported-models).
-
-**Контейнер вылетает с CUDA-ошибкой**
-→ Вы используете GPU-образ без GPU или с несовместимым поколением. Переключитесь на CPU-образ или выберите правильный GPU-тег.
-
-**Размерность векторов не совпадает с Qdrant**
-→ Qdrant создаёт коллекцию один раз при первом старте. Если сменили модель — нужно пересоздать коллекцию:
-```bash
-# Удалить данные Qdrant и перезапустить (данные RAG будут утеряны):
-docker volume rm smart-support_qdrant_data
-make up AI=local-embedding STORAGE=filesystem
-```
-
-**Backend не подключается к embedding-серверу**
-→ В режиме `AI=local-embedding` Makefile автоматически устанавливает `EMBEDDING_BASE_URL=http://embedding:8000/v1`. Убедитесь, что запускаете через `make up`, а не напрямую через `docker compose`.
+Если меняете embedding-модель, обновите `EMBEDDING_VECTOR_SIZE` и пересоздайте
+или переиндексируйте коллекции Qdrant.

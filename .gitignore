@@ -61,3 +61,8 @@ Thumbs.db
 
 # Docker
 *.dockerignore
+
+# Локальные модели
+models/
+llm/models/
+embedding/.data/

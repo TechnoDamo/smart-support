@@ -8,11 +8,11 @@
 
    ```bash
    cd /Users/damir/Desktop/smart-support
-   make up AI=cloud STORAGE=minio GRAYLOG=true
+   make up GRAYLOG=local
    ```
 
    `make` автоматически:
-   - добавляет профиль `graylog` в docker-compose;
+   - добавляет профиль `local-graylog` в docker-compose;
    - прокидывает в backend переменные `GRAYLOG_ENABLED=true`, `GRAYLOG_HOST=graylog`, `GRAYLOG_PORT=12201`, `GRAYLOG_PROTOCOL=tcp`;
    - запускает одноразовый контейнер `smart-support-graylog-init`, который создаёт GELF input через REST API (`POST /api/system/inputs`).
 
@@ -46,7 +46,7 @@ LOG_FORMAT=json               # json включает GELF-поля, text — у
 
 Важные нюансы:
 
-- `GRAYLOG_ENABLED` выставляется автоматически при `make up ... GRAYLOG=true` — вручную включать не нужно.
+- `GRAYLOG_ENABLED` выставляется автоматически при `make up ... GRAYLOG=local` — вручную включать не нужно.
 - `GRAYLOG_HOST=graylog` работает только в docker-стеке (по имени сервиса). Если backend стартует локально вне Docker — замените на `localhost`.
 - `GRAYLOG_ADMIN_PASSWORD` читается init-сервисом и должен совпадать с хешем `GRAYLOG_ROOT_PASSWORD_SHA2` в `graylog/docker-compose.yml`. Для дефолтного `admin` хеш уже зашит.
 
@@ -79,7 +79,7 @@ LOG_FORMAT=json               # json включает GELF-поля, text — у
 ## Устранение неполадок
 
 **Graylog не стартует**
-- `docker compose -f docker-compose.yml --profile graylog logs graylog`
+- `docker compose -f docker-compose.yml --profile local-graylog logs graylog`
 - Проверьте, что порты `19000`, `12201`, `5555`, `1514` свободны.
 - Elasticsearch требует минимум 512 МБ heap; при нехватке памяти контейнер падает с OOM.
 

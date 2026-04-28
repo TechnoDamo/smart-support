@@ -1,27 +1,27 @@
 services:
   llm:
-    profiles: ["local-ai", "local-llm"]
-    platform: "${DOCKER_PLATFORM:-linux/amd64}"
+    profiles: ["local-llm"]
     image: "${VLLM_IMAGE:-vllm/vllm-openai:v0.6.3}"
     container_name: smart-support-llm
-    command: >
-      --model ${LLM_MODEL_LOCAL:-Qwen/Qwen2.5-0.5B-Instruct}
-      --served-model-name ${LLM_MODEL_LOCAL:-Qwen/Qwen2.5-0.5B-Instruct}
-      --host 0.0.0.0
-      --port 8080
-      --device ${LLM_DEVICE:-cpu}
-      --dtype ${LLM_DTYPE:-float32}
-      --max-model-len ${LLM_CTX_SIZE:-2048}
-      --trust-remote-code
+    entrypoint: ["/bin/sh", "/opt/smart-support/start-vllm.sh"]
     ports:
       - "${LLM_PORT:-8091}:8080"
     environment:
       HUGGING_FACE_HUB_TOKEN: "${HUGGING_FACE_HUB_TOKEN:-}"
       HF_ENDPOINT: "${HF_ENDPOINT:-https://huggingface.co}"
-      HF_HOME: /models
-      VLLM_CPU_KVCACHE_SPACE: "${VLLM_CPU_KVCACHE_SPACE:-4}"
+      LLM_MODEL_LOCAL: "${LLM_MODEL_LOCAL:-qwen2.5-0.5b-instruct}"
+      LLM_CTX_SIZE: "${LLM_CTX_SIZE:-2048}"
+      LLM_DTYPE: "${LLM_DTYPE:-bfloat16}"
     volumes:
-      - "${LLM_MODEL_STORAGE_FOLDER:-./models}:/models"
+      - "${LLM_MODELS_DIR:-../models}:/models"
+      - "./start-vllm.sh:/opt/smart-support/start-vllm.sh:ro"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - smart-support
     healthcheck:

@@ -1,6 +1,7 @@
 # PostgreSQL — основная реляционная БД. Запускается как отдельно, так и в составе корневого docker-compose.
 services:
   postgres:
+    profiles: ["local-postgres"]
     image: postgres:16
     container_name: smart-support-postgres
     environment:

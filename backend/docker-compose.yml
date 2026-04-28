@@ -12,6 +12,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     networks:
       - smart-support
 
@@ -83,6 +84,7 @@ services:
         condition: service_completed_successfully
       qdrant:
         condition: service_started
+        required: false
     networks:
       - smart-support
       - graylog
