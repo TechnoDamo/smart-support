@@ -1,51 +1,98 @@
-# Embedding Server
+# Локальные embeddings
 
-Папка `embedding/` содержит локальный OpenAI-совместимый сервер эмбеддингов на vLLM. Он нужен, когда embeddings не хочется отдавать в облако и удобнее считать их рядом с backend и Qdrant.
+`embedding/` поднимает OpenAI-compatible embedding-сервер через Hugging Face TEI
+на NVIDIA CUDA. Локальный деплой подразумевает GPU-хост.
 
-## Роль в архитектуре
+## Настройка
 
-- backend вызывает `/v1/embeddings` так же, как облачный OpenAI-совместимый API;
-- сама embedding-модель выбирается переменной `EMBEDDING_MODEL`;
-- размерность обязательно синхронизируется с `EMBEDDING_VECTOR_SIZE`;
-- результат уходит в Qdrant, а метаданные о чанках и retrieval остаются в Postgres.
+Из корня репозитория:
 
-## Быстрый запуск отдельно
+```bash
+make ai-deployment-tools-setup
+make download-embedding-model
+make up EMBEDDING=local
+```
+
+Или отдельно:
 
 ```bash
 cd embedding
-EMBEDDING_MODEL=BAAI/bge-m3 EMBEDDING_VECTOR_SIZE=1024 docker compose up -d
+make download-model
+make up
+make health
 ```
 
-По умолчанию сервер публикуется на `localhost:8090`.
+## Кеш модели
 
-Проверка:
+Snapshot модели скачивается в:
+
+```text
+${EMBEDDING_MODELS_DIR}/${EMBEDDING_MODEL_LOCAL}
+```
+
+Значения по умолчанию:
+
+```text
+EMBEDDING_MODELS_DIR=../models
+EMBEDDING_MODEL_LOCAL=bge-small-en-v1.5
+EMBEDDING_MODEL_SOURCE=BAAI/bge-small-en-v1.5
+EMBEDDING_VECTOR_SIZE=384
+```
+
+При запуске из корневого стека backend получает:
+
+```text
+EMBEDDING_PROVIDER=openai_compatible
+EMBEDDING_BASE_URL=http://embedding:8000/v1
+EMBEDDING_MODEL=${EMBEDDING_MODEL_LOCAL}
+```
+
+Снаружи TEI доступен по адресу:
+
+```text
+http://localhost:8090/v1
+```
+
+## Команды
 
 ```bash
-curl http://localhost:8090/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{"model":"BAAI/bge-m3","input":"тест"}'
+make help
+make download-model
+make check-model
+make up
+make health
+make logs
+make down
 ```
 
-## Запуск в составе всей системы
+## Основные переменные
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `EMBEDDING_MODELS_DIR` | `../models` | Общий кеш моделей на хосте |
+| `EMBEDDING_MODEL_LOCAL` | `bge-small-en-v1.5` | Имя папки модели в общем кеше |
+| `EMBEDDING_MODEL_SOURCE` | `BAAI/bge-small-en-v1.5` | Hugging Face source для `make download-model` |
+| `EMBEDDING_VECTOR_SIZE` | `384` | Размерность векторов для backend и Qdrant |
+| `EMBEDDING_PORT` | `8090` | Порт TEI на хосте |
+| `TEI_IMAGE` | `ghcr.io/huggingface/text-embeddings-inference:86-1.5` | Docker image TEI |
+
+Подсказки по TEI image:
+
+| GPU | Image |
+| --- | --- |
+| RTX 3090 / Ampere | `ghcr.io/huggingface/text-embeddings-inference:86-1.5` |
+| T4 / Turing | `ghcr.io/huggingface/text-embeddings-inference:turing-1.5` |
+
+## Проверка
 
 ```bash
-make up AI=local-embedding OPENAI_API_KEY=sk-... \
-  EMBEDDING_MODEL=BAAI/bge-m3 \
-  EMBEDDING_VECTOR_SIZE=1024
+curl -s http://localhost:8090/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "bge-small-en-v1.5",
+    "input": "hello"
+  }'
 ```
 
-или полностью локально:
-
-```bash
-make up AI=local-ai \
-  LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-  EMBEDDING_MODEL=BAAI/bge-m3 \
-  EMBEDDING_VECTOR_SIZE=1024
-```
-
-## Важные замечания
-
-- Основной сценарий — NVIDIA GPU и Docker с `nvidia-container-toolkit`.
-- CPU-фолбэк допустим только для экспериментов: он существенно медленнее.
-- Если модель приватная на Hugging Face, передайте `HUGGING_FACE_HUB_TOKEN`.
-- При смене embedding-модели не забудьте обновить `EMBEDDING_VECTOR_SIZE` и переиндексировать коллекцию в Qdrant.
+Если меняете embedding-модель, обновите `EMBEDDING_VECTOR_SIZE` и пересоздайте
+или переиндексируйте коллекции Qdrant.

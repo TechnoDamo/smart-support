@@ -1,22 +1,19 @@
 services:
   embedding:
-    profiles: ["local-ai", "local-embedding"]
-    image: vllm/vllm-openai:v0.6.3
+    profiles: ["local-embedding"]
+    image: "${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:86-1.5}"
     container_name: smart-support-embedding
     command: >
-      --model ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
-      --served-model-name ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
-      --task embedding
-      --host 0.0.0.0
+      --model-id /data/${EMBEDDING_MODEL_LOCAL:-bge-small-en-v1.5}
+      --hostname 0.0.0.0
       --port 8000
-      --trust-remote-code
-      --max-model-len ${EMBEDDING_MAX_MODEL_LEN:-512}
     ports:
       - "${EMBEDDING_PORT:-8090}:8000"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: "${HUGGING_FACE_HUB_TOKEN:-}"
+      HF_ENDPOINT: "${HF_ENDPOINT:-https://huggingface.co}"
     volumes:
-      - hf_cache:/root/.cache/huggingface
+      - "${EMBEDDING_MODELS_DIR:-../models}:/data"
     deploy:
       resources:
         reservations:
@@ -32,9 +29,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-
-volumes:
-  hf_cache:
 
 networks:
   smart-support:

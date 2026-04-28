@@ -1,57 +1,100 @@
-# LLM Server
+# Локальный LLM
 
-Папка `llm/` содержит локальный OpenAI-совместимый сервер на llama.cpp. Он нужен, когда саму генеративную модель хочется держать локально, а backend должен обращаться к ней так же, как к облачному `/v1/chat/completions`.
+`llm/` поднимает локальный OpenAI-compatible LLM-сервер через vLLM на NVIDIA
+CUDA. CPU-режимы и llama.cpp намеренно убраны: локальный деплой подразумевает
+GPU-хост.
 
-## Роль в архитектуре
+## Настройка
 
-- backend использует стандартный `LLM_BASE_URL` и `LLM_MODEL`;
-- при локальном режиме `LLM_BASE_URL` переключается на `http://llm:8080/v1`;
-- модель передаётся как путь к GGUF-файлу внутри контейнера;
-- embeddings при этом могут оставаться облачными или тоже быть локальными через `embedding/`.
+Из корня репозитория:
 
-## Требования
+```bash
+make ai-deployment-tools-setup
+make download-llm-model
+make up LLM=local
+```
 
-- GGUF-модель на хосте, доступная через volume `LLM_MODELS_DIR`.
-- Для CPU-режима достаточно обычного Docker.
-- Для GPU-ускорения настройте image/runtime под свою платформу отдельно; базовый compose ниже ориентирован на простой запуск без обязательной GPU-зависимости.
-
-## Быстрый запуск отдельно
+Или отдельно:
 
 ```bash
 cd llm
-LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-LLM_MODELS_DIR=../models \
-docker compose up -d
+make download-model
+make up
+make health
 ```
 
-Проверка:
+## Кеш модели
+
+Snapshot модели скачивается в:
+
+```text
+${LLM_MODELS_DIR}/${LLM_MODEL_LOCAL}
+```
+
+Значения по умолчанию:
+
+```text
+LLM_MODELS_DIR=../models
+LLM_MODEL_LOCAL=qwen2.5-0.5b-instruct
+LLM_MODEL_SOURCE=Qwen/Qwen2.5-0.5B-Instruct
+```
+
+При запуске из корневого стека backend получает:
+
+```text
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=http://llm:8080/v1
+LLM_MODEL=${LLM_MODEL_LOCAL}
+```
+
+Снаружи vLLM доступен по адресу:
+
+```text
+http://localhost:8091/v1
+```
+
+## Команды
 
 ```bash
-curl http://localhost:8091/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"local-llama","messages":[{"role":"user","content":"Привет"}]}'
+make help
+make download-model
+make check-model
+make up
+make health
+make logs
+make down
 ```
 
-## Запуск в составе всей системы
+## Основные переменные
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `LLM_MODELS_DIR` | `../models` | Общий кеш моделей на хосте |
+| `LLM_MODEL_LOCAL` | `qwen2.5-0.5b-instruct` | Имя папки модели и served model name |
+| `LLM_MODEL_SOURCE` | `Qwen/Qwen2.5-0.5B-Instruct` | Hugging Face source для `make download-model` |
+| `LLM_PORT` | `8091` | Порт vLLM на хосте |
+| `VLLM_IMAGE` | `vllm/vllm-openai:v0.6.3` | Docker image vLLM |
+| `LLM_CTX_SIZE` | `2048` | Максимальная длина контекста |
+| `LLM_DTYPE` | `bfloat16` | dtype для vLLM |
+
+## Проверка
 
 ```bash
-make up AI=local-llm OPENAI_API_KEY=sk-... \
-  LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-  LLM_MODELS_DIR=./models
+curl -s http://localhost:8091/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen2.5-0.5b-instruct",
+    "messages": [{"role": "user", "content": "Say hello in one sentence"}],
+    "max_tokens": 32
+  }'
 ```
 
-или вместе с локальными embeddings:
+Если контейнер сразу завершается, проверьте:
 
 ```bash
-make up AI=local-ai \
-  LLM_MODEL=/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-  LLM_MODELS_DIR=./models \
-  EMBEDDING_MODEL=BAAI/bge-m3 \
-  EMBEDDING_VECTOR_SIZE=1024
+docker logs smart-support-llm
+nvidia-smi
 ```
 
-## Практика деплоя
-
-- Самый простой путь — держать GGUF в `./models` корня репозитория и монтировать каталог целиком.
-- `LLM_MODEL` должен указывать на путь внутри контейнера, поэтому при монтировании `./models:/models` используйте формат `/models/имя.gguf`.
-- `LLM_N_GPU_LAYERS=0` означает CPU-режим. Для частичного offload на GPU увеличьте значение.
+Стартовый скрипт падает сразу, если GPU не виден внутри контейнера или если
+папка snapshot модели отсутствует.

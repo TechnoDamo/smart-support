@@ -15,7 +15,7 @@ Qdrant не хранит бизнес-истину по документам: э
 
 ```bash
 cd qdrant
-docker compose up -d
+docker compose --profile local-qdrant up -d
 ```
 
 По умолчанию:
@@ -26,14 +26,14 @@ docker compose up -d
 Если нужен API key:
 
 ```bash
-QDRANT_API_KEY=secret docker compose up -d
+QDRANT_API_KEY=secret docker compose --profile local-qdrant up -d
 ```
 
 Остановка:
 
 ```bash
-docker compose down
-docker compose down -v
+docker compose --profile local-qdrant down
+docker compose --profile local-qdrant down -v
 ```
 
 ## Запуск в составе всей системы
@@ -41,7 +41,7 @@ docker compose down -v
 Из корня проекта:
 
 ```bash
-make up AI=cloud
+make up QDRANT=local
 ```
 
 Qdrant будет доступен backend-у как `http://qdrant:6333` внутри docker-сети `smart-support`.
